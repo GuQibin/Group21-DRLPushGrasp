@@ -1,0 +1,12 @@
+# Python 3.8 is recommended
+
+# Top-level dependencies for the ME5418 project.
+# Pip will handle installing their sub-dependencies automatically.
+
+# Environment: The simulation world and robot
+# panda-gym's latest versions correctly depend on gymnasium.
+panda-gym==3.0.7
+
+# RL Algorithm: The "brain" that learns the policy (PPO)
+# We choose a version of SB3 that is compatible with Gymnasium
+stable-baselines3[extra]==2.3.0

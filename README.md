@@ -1,2 +1,12 @@
 # Group21-DRLPushGrasp
 Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation:  Joint-Space Control of Push-Grasp Strategies in Constrained Environments
+
+
+Group21-DRLPushGrasp/
+├── envs/
+│   ├── __init__.py          # 使环境可以被注册和发现
+│   └── strategic_env.py     # 我们的核心环境文件
+├── scripts/
+│   └── test_custom_env.py   # 用于验证我们新环境的脚本
+├── README.md                # 项目说明文件
+└── requirements.txt         # 项目依赖文件
