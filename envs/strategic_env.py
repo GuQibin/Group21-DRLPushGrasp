@@ -3,130 +3,130 @@ import gymnasium as gym
 from gymnasium import spaces
 from typing import Optional
 
-from panda_gym.envs.core import RobotTaskEnv
-from panda_gym.envs.robots.panda import Panda
+# 导入所有需要的 panda_gym 和 pybullet 组件
 from panda_gym.pybullet import PyBullet
+from panda_gym.envs.robots.panda import Panda
 import pybullet_data
 import pybullet as p
 
-from panda_gym.envs.tasks.push import Push
-from panda_gym.envs.tasks.pick_and_place import PickAndPlace
 
+# ‼️ 关键架构：我们现在直接继承最基础的 gym.Env
+class StrategicPushAndGraspEnv(gym.Env):
+    metadata = {"render_modes": ["human"], "render_fps": 30}
 
-class StrategicPushAndGraspEnv(RobotTaskEnv):
-    def __init__(self, render_mode: str = "rgb_array", control_type: str = "ee"):
-        sim = PyBullet(render_mode=render_mode)
-        robot_base_position = np.array([0.4, -0.3, 0.0])
-        robot = Panda(sim, block_gripper=True, control_type=control_type, base_position=robot_base_position)
+    def __init__(self, render_mode: str = "human"):
+        print("Initializing Strategic Environment...")
+        # 1. 创建我们自己完全管理的模拟器和机器人
+        self.sim = PyBullet(render_mode=render_mode)
+        self.robot = Panda(self.sim, block_gripper=True, base_position=np.array([0.4, -0.3, 0.0]))
 
-        self.robot = robot
-        self.sim = sim
-        self.objects_body_names = []
-        self.scene_setup = False
-
-        # 定义目标区域的中心和大小
-        self.goal_pos = np.array([-0.2, -0.2])  # 方形区域的中心点
-        self.goal_size = 0.1  # 方形区域的边长
-
-        # 真实的逻辑任务也在这里创建
-        self.task_push = Push(sim)
-        self.task_pick_and_place = PickAndPlace(sim)
-
-        pseudo_task = self.task_pick_and_place
-        super().__init__(self.robot, pseudo_task)
-
+        # 2. 定义我们自己的动作空间
         self.action_space = spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32)
 
+        # 3. 初始化场景和物体参数
+        self.objects = {}
+        self.goal_pos = np.array([-0.2, -0.2])
+        self.goal_size = 0.1
+        self.scene_setup = False
+
+        # 4. 通过一次reset来确定观测空间的维度
+        initial_obs, _ = self.reset()
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=initial_obs.shape, dtype=np.float32)
+
     def _draw_goal_square(self):
-        """使用PyBullet的调试工具在目标位置画一个绿色的方形轮廓"""
-        half_size = self.goal_size / 2
-        color = [0, 1, 0]  # Green
-        z_offset = 0.001  # 略高于桌面
-
-        # 定义正方形的四个角点
-        center_x, center_y = self.goal_pos
-        p1 = [center_x - half_size, center_y - half_size, z_offset]
-        p2 = [center_x + half_size, center_y - half_size, z_offset]
-        p3 = [center_x + half_size, center_y + half_size, z_offset]
-        p4 = [center_x - half_size, center_y + half_size, z_offset]
-
-        # 用四条线连接角点
+        # ... (此函数无需改动) ...
+        half_size, color, z = self.goal_size / 2, [0, 1, 0], 0.001
+        cx, cy = self.goal_pos
+        p1, p2 = [cx - half_size, cy - half_size, z], [cx + half_size, cy - half_size, z]
+        p3, p4 = [cx + half_size, cy + half_size, z], [cx - half_size, cy + half_size, z]
         client = self.sim.physics_client
-        client.addUserDebugLine(p1, p2, lineColorRGB=color, lineWidth=3)
-        client.addUserDebugLine(p2, p3, lineColorRGB=color, lineWidth=3)
-        client.addUserDebugLine(p3, p4, lineColorRGB=color, lineWidth=3)
-        client.addUserDebugLine(p4, p1, lineColorRGB=color, lineWidth=3)
+        client.addUserDebugLine(p1, p2, color, 3);
+        client.addUserDebugLine(p2, p3, color, 3)
+        client.addUserDebugLine(p3, p4, color, 3);
+        client.addUserDebugLine(p4, p1, color, 3)
 
+    def _is_success(self, achieved_goal: np.ndarray) -> bool:
+        # ... (此函数无需改动) ...
+        half_size = self.goal_size / 2
+        return (
+                (self.goal_pos[0] - half_size < achieved_goal[0] < self.goal_pos[0] + half_size) and
+                (self.goal_pos[1] - half_size < achieved_goal[1] < self.goal_pos[1] + half_size)
+        )
+
+    def _get_safe_spawn_position(self, existing_objects):
+        # ... (此函数无需改動) ...
+        is_valid = False
+        while not is_valid:
+            pos_xy = np.random.uniform(low=-0.3, high=0.3, size=2)
+            is_in_goal = self._is_success(pos_xy)
+            is_overlapping = False
+            if existing_objects:
+                distances = [np.linalg.norm(pos_xy - np.array(self.sim.get_base_position(name)[:2])) for name in
+                             existing_objects]
+                if min(distances) < 0.08: is_overlapping = True
+            if not is_in_goal and not is_overlapping: is_valid = True
+        return [pos_xy[0], pos_xy[1], 0.02]
+
+    def _get_obs(self):
+        robot_obs = self.robot.get_obs()
+        object_states = []
+        for name in sorted(self.objects.keys()):
+            pos, ori = self.sim.get_base_position(name), self.sim.get_base_orientation(name)
+            vel, ang_vel = self.sim.get_base_velocity(name), self.sim.get_base_angular_velocity(name)
+            obj_state = np.concatenate([pos, ori, vel, ang_vel])
+            object_states.append(obj_state)
+        return np.concatenate([robot_obs] + object_states) if object_states else robot_obs
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         with self.sim.no_rendering():
-            for body_name in self.objects_body_names:
-                body_id = self.sim._bodies_idx.get(body_name)
-                if body_id is not None: self.sim.physics_client.removeBody(body_id)
-            self.objects_body_names.clear()
-
             if not self.scene_setup:
-                self.sim.physics_client.setAdditionalSearchPath(pybullet_data.getDataPath())
-                self.sim.loadURDF(body_name="plane", fileName="plane.urdf", basePosition=[0, 0, -0.001])
+                self.sim.create_box(body_name="table", half_extents=np.array([0.4, 0.4, 0.01]), mass=0.0,
+                                    position=np.array([0, 0, -0.01]), rgba_color=np.array([0.8, 0.8, 0.8, 1]))
                 self.scene_setup = True
 
-            self._draw_goal_square()
+            for body_name in self.objects:
+                self.sim.physics_client.removeBody(self.sim._bodies_idx.get(body_name))
+            self.objects.clear()
 
+            self._draw_goal_square()
             self.robot.reset()
 
-            num_objects = np.random.randint(2, 5)
+            num_objects = np.random.randint(5, 9)
+            object_types = ["cube", "sphere"]
             for i in range(num_objects):
                 body_name = f"object_{i}"
-                self.sim.create_box(
-                    body_name=body_name, half_extents=np.array([0.02, 0.02, 0.02]), mass=1.0,
-                    position=np.random.uniform([-0.2, -0.2, 0.02], [0.1, 0.2, 0.02]),
-                    rgba_color=np.random.uniform(0, 1, size=4),
-                )
-                self.objects_body_names.append(body_name)
+                object_type = np.random.choice(object_types)
+                spawn_pos = self._get_safe_spawn_position(self.objects.keys())
 
-        self.task_push.goal = self.goal_pos
-        self.task_pick_and_place.goal = self.goal_pos
-        observation = self._get_obs()
-        info = {"is_success": False}
-        return observation, info
+                if object_type == "cube":
+                    self.sim.create_box(
+                        body_name=body_name, half_extents=np.array([0.02] * 3), mass=1.0,
+                        position=spawn_pos, rgba_color=np.random.uniform(0, 1, size=4))
+                elif object_type == "sphere":
+                    self.sim.create_sphere(
+                        body_name=body_name, radius=0.02, mass=1.0,
+                        position=spawn_pos, rgba_color=np.random.uniform(0, 1, size=4))
+                self.objects[body_name] = {"type": object_type}
 
-    def _is_success(self, achieved_goal: np.ndarray) -> bool:
-        """判断物体是否在目标方形区域内"""
-        half_size = self.goal_size / 2
-        # achieved_goal 是物体的 (x, y, z) 坐标
-        # 我们只关心 x 和 y
-        object_xy = achieved_goal[:2]
-
-        # 判断物体的 xy 坐标是否都在方形区域的边界内
-        return (
-                (self.goal_pos[0] - half_size < object_xy[0] < self.goal_pos[0] + half_size) and
-                (self.goal_pos[1] - half_size < object_xy[1] < self.goal_pos[1] + half_size)
-        )
+        return self._get_obs(), {}
 
     def step(self, action: np.ndarray):
-        a_skill = action[0]
-        dx, dy, dz, gripper_ctrl = action[1], action[2], -0.1, 1.0
-        low_level_action = np.array([dx, dy, dz, gripper_ctrl])
-        self.robot.set_action(low_level_action)
+        a_skill, dx, dy, dz, gripper_ctrl = action[0], action[1], action[2], -0.1, 1.0
+        self.robot.set_action(np.array([dx, dy, dz, gripper_ctrl]))
         self.sim.step()
 
-        observation = self._get_obs()
+        obs = self._get_obs()
 
-        # achieved_goal 通常是其中一个物体的位置，由父类的 _get_obs 决定
-        achieved_goal = observation["achieved_goal"]
-
+        # 简化版的奖励和成功判断 (假设关心第一个物体)
+        achieved_goal = self.sim.get_base_position(list(self.objects.keys())[0])
         terminated = self._is_success(achieved_goal)
-
-        # 我们可以继续使用 panda-gym 的奖励函数，因为它通常是基于到目标点距离的
-        # 这对于引导 agent 仍然是有效的
-        desired_goal = self.goal_pos
-        reward = self.task_push.compute_reward(achieved_goal, desired_goal, {})
-
-        # 如果成功，可以给予一个额外的巨大奖励
-        if terminated:
-            reward += 10.0  # 成功奖励
+        reward = -np.linalg.norm(achieved_goal[:2] - self.goal_pos)
+        if terminated: reward += 10.0
 
         truncated = False
         info = {"is_success": bool(terminated)}
-        return observation, float(reward), bool(terminated), truncated, info
+        return obs, float(reward), bool(terminated), truncated, info
+
+    def close(self):
+        self.sim.close()
