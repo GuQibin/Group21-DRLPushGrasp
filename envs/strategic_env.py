@@ -1,57 +1,79 @@
-import gymnasium as gym
 import numpy as np
-import panda_gym
+import gymnasium as gym
+from gymnasium import spaces
+from typing import Optional, Dict, Any
+
+from panda_gym.envs.core import RobotTaskEnv
+from panda_gym.envs.robots.panda import Panda
+from panda_gym.pybullet import PyBullet
+from panda_gym.envs.tasks.push import Push
+from panda_gym.envs.tasks.pick_and_place import PickAndPlace
 
 
-class StrategicPushAndGraspEnv(gym.Env):
-    def __init__(self, render_mode="human"):
-        print("Initializing Strategic Environment with Gymnasium...")
+# 我们的主环境，继承自 panda_gym 的 RobotTaskEnv
+class StrategicPushAndGraspEnv(RobotTaskEnv):
+    def __init__(self, render_mode: str = "rgb_array", control_type: str = "ee"):
+        # 1. 创建共享的模拟器和机器人
+        # 注意：这里我们让Panda的夹爪默认不锁定，因为抓取任务需要它
+        sim = PyBullet(render_mode=render_mode)
+        robot_base_position = np.array([0.4, -0.3, 0.0])
+        robot = Panda(sim, block_gripper=False, control_type=control_type, base_position=robot_base_position)
 
-        # 1. 在内部创建两个panda-gym的基础环境，并传递 render_mode
-        self.push_env = gym.make("PandaPush-v3", render_mode=render_mode)
-        self.pick_and_place_env = gym.make("PandaPickAndPlace-v3", render_mode=render_mode)
+        # 2. 创建一个“逻辑”任务实例，用于初始化父类和获取观测空间结构
+        #    我们用 PickAndPlace，因为它有更完整的状态
+        self.default_task = PickAndPlace(sim)
 
-        # 2. 定义我们自己的、符合Proposal的“策略层”动作空间
-        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+        # 3. 创建两个“策略”任务，用于在step中计算奖励和成功条件
+        self.task_push = Push(sim)
+        self.task_pick_and_place = PickAndPlace(sim)
 
-        # 3. 状态空间可以暂时直接复用panda-gym的状态空间
-        self.observation_space = self.push_env.observation_space
+        # 4. 使用默认任务来初始化父类
+        super().__init__(robot, self.default_task)
 
-        print("Environment Initialized!")
+        # 5. 覆盖掉父类的动作空间，使用我们自己的4D策略空间
+        self.action_space = spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32)
 
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed, options=options)
-        print("Resetting environment...")
-        initial_observation, info = self.push_env.reset(seed=seed, options=options)
-        # 您可能需要添加逻辑来重置 pick_and_place_env 并同步物体位置
-        return initial_observation, info
+        # ‼️ 我们不再需要自定义的_get_obs, reset, close, _setup_scene 等方法
+        #    因为父类 RobotTaskEnv 已经为我们处理好了！
 
-    def step(self, action):
-        # 关键改动：step 方法现在返回5个值
-        # (observation, reward, terminated, truncated, info)
-
+    # 我们唯一需要重写的就是 step 方法
+    def step(self, action: np.ndarray):
+        # --- 动作转换逻辑 ---
+        # action: (a_skill, a_x, a_y, a_theta)
         a_skill = action[0]
 
-        if a_skill > 0:
-            # --- 执行 Pick-and-Place ---
-            # TODO: 实现动作转换逻辑
-            panda_action = np.zeros(self.pick_and_place_env.action_space.shape)
-            obs, reward, terminated, truncated, info = self.pick_and_place_env.step(panda_action)
-        else:
-            # --- 执行 Push ---
-            # TODO: 实现动作转换逻辑
-            panda_action = np.zeros(self.push_env.action_space.shape)
-            obs, reward, terminated, truncated, info = self.push_env.step(panda_action)
+        # 将 a_x, a_y 转换为底层动作 (dx, dy, dz, gripper)
+        dx, dy = action[1], action[2]
+        dz = -0.1  # 默认稍微向下
 
-        # TODO: 根据您的Proposal重新计算奖励
-        custom_reward = reward  # Placeholder
+        # 根据技能决定夹爪的开合
+        if a_skill > 0:  # PickAndPlace 逻辑
+            gripper_ctrl = -1.0  # 尝试闭合
+        else:  # Push 逻辑
+            # 推的时候，我们希望夹爪是锁定的，但Panda机器人不能动态锁定
+            # 所以我们让它保持张开
+            gripper_ctrl = 1.0
 
-        return obs, custom_reward, terminated, truncated, info
+            # Panda 机器人的底层动作是 (dx, dy, dz, gripper_ctrl)
+        low_level_action = np.array([dx, dy, dz, gripper_ctrl])
+        self.robot.set_action(low_level_action)
+        self.sim.step()
 
-    def render(self):
-        # 渲染现在由 gym.make() 中的 render_mode 控制，但保留此方法是好习惯
-        return self.pick_and_place_env.render()
+        observation = self._get_obs()  # 使用父类的 _get_obs 方法
 
-    def close(self):
-        self.push_env.close()
-        self.pick_and_place_env.close()
+        # --- 根据 a_skill 选择奖励计算方式 ---
+        achieved_goal = observation["achieved_goal"]
+        desired_goal = observation["desired_goal"]
+
+        # ‼️ 关键改动：调用 is_success 时不再传入 info
+        if a_skill > 0:  # 使用 PickAndPlace 的奖励逻辑
+            reward = self.task_pick_and_place.compute_reward(achieved_goal, desired_goal, {})
+            terminated = self.task_pick_and_place.is_success(achieved_goal, desired_goal)
+        else:  # 使用 Push 的奖励逻辑
+            reward = self.task_push.compute_reward(achieved_goal, desired_goal, {})
+            terminated = self.task_push.is_success(achieved_goal, desired_goal)
+
+        truncated = False
+        info = {"is_success": bool(terminated)}
+
+        return observation, float(reward), bool(terminated), truncated, info
