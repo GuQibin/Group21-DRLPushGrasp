@@ -10,3 +10,13 @@ Group21-DRLPushGrasp/
 │   └── test_custom_env.py   # 用于验证我们新环境的脚本
 ├── README.md                # 项目说明文件
 └── requirements.txt         # 项目依赖文件
+
+
+python -m scripts.minimal_test
+python -m scripts.test_complete_reward
+python -m scripts.test_custom_env
+python -m scripts.test_env_once
+python -m scripts.test_objects_util
+python -m scripts.test_physics_util
+python -m scripts.test_robot_util
+python -m scripts.test_state_action

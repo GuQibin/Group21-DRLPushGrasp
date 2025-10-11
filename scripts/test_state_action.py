@@ -5,8 +5,7 @@ Tests that the implementation matches the ME5418 proposal exactly.
 
 import numpy as np
 import gymnasium as gym
-import envs
-
+import envs  # 这一行非常重要，它会执行__init__.py中的注册代码
 
 def test_environment_creation():
     """Test 1: Environment can be created successfully."""

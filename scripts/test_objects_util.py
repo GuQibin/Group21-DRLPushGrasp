@@ -14,7 +14,7 @@ def test_shape_descriptors():
     """Test shape descriptor computation"""
     print("Testing compute_shape_descriptors...")
     
-    from utils.object_utils import compute_shape_descriptors
+    from utils.object_util import compute_shape_descriptors
     
     # Test cube
     cube_desc = compute_shape_descriptors("cube", half_extents=np.array([0.02, 0.02, 0.02]))
@@ -42,7 +42,7 @@ def test_with_mock_sim():
     """Test functions with mock simulation"""
     print("Testing with mock simulation...")
     
-    from utils.object_utils import (
+    from utils.object_util import (
         compute_pairwise_distance_matrix,
         compute_occlusion_masks,
         select_target_heuristic,
@@ -104,7 +104,7 @@ def test_empty_objects():
     """Test edge case with no objects"""
     print("Testing edge cases...")
     
-    from utils.object_utils import (
+    from utils.object_util import (
         compute_pairwise_distance_matrix,
         compute_occlusion_masks
     )

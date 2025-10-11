@@ -13,7 +13,7 @@ def test_imports():
     print("Testing imports...")
     
     try:
-        from utils.physics_utils import (
+        from utils.physics_util import (
             check_workspace_violation,
             check_collision_with_table,
             check_object_collision,
@@ -40,7 +40,7 @@ def test_workspace_violation_logic():
     """Test workspace violation logic with mock data"""
     print("\nTesting workspace violation logic...")
     
-    from utils.physics_utils import check_workspace_violation
+    from utils.physics_util import check_workspace_violation
     
     # Mock sim
     class MockSim:
@@ -72,7 +72,7 @@ def test_stability_check():
     """Test object stability checking"""
     print("\nTesting stability check...")
     
-    from utils.physics_utils import is_object_stable
+    from utils.physics_util import is_object_stable
     
     # Mock sim
     class MockSim:
@@ -102,7 +102,7 @@ def test_volume_computation():
     """Test volume computation"""
     print("\nTesting volume computation...")
     
-    from utils.physics_utils import compute_object_volume
+    from utils.physics_util import compute_object_volume
     
     # Mock sim with bounding box
     class MockSim:
@@ -127,7 +127,7 @@ def test_velocity_magnitude():
     """Test velocity magnitude calculation"""
     print("\nTesting velocity magnitude...")
     
-    from utils.physics_utils import get_object_velocity_magnitude
+    from utils.physics_util import get_object_velocity_magnitude
     
     # Mock sim
     class MockSim:
@@ -150,7 +150,7 @@ def test_multiple_violations():
     """Test checking multiple objects"""
     print("\nTesting multiple workspace violations...")
     
-    from utils.physics_utils import check_multiple_workspace_violations
+    from utils.physics_util import check_multiple_workspace_violations
     
     # Mock sim
     class MockSim:
@@ -191,7 +191,7 @@ def test_with_real_environment():
         env = gym.make("StrategicPushAndGrasp-v0", render_mode="human")
         obs, info = env.reset()
         
-        from utils.physics_utils import (
+        from utils.physics_util import (
             is_object_stable,
             get_object_velocity_magnitude,
             check_workspace_violation

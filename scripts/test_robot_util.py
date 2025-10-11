@@ -15,7 +15,7 @@ def test_basic_imports():
     print("Testing imports...")
     
     try:
-        from utils.robot_utils import (
+        from utils.robot_util import (
             execute_pick_and_place,
             execute_push,
             move_to_position,
@@ -38,7 +38,7 @@ def test_trajectory_planning():
     """Test trajectory planning without simulation"""
     print("\nTesting trajectory planning...")
     
-    from utils.robot_utils import plan_trajectory
+    from utils.robot_util import plan_trajectory
     
     start = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     goal = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7])
@@ -56,7 +56,7 @@ def test_gripper_functions():
     """Test gripper utility functions"""
     print("\nTesting gripper functions...")
     
-    from utils.robot_utils import get_gripper_state
+    from utils.robot_util import get_gripper_state
     
     # Create mock robot
     class MockRobot:
@@ -90,7 +90,7 @@ def test_with_real_environment():
         env = gym.make("StrategicPushAndGrasp-v0", render_mode="human")
         obs, info = env.reset()
         
-        from utils.robot_utils import get_gripper_state
+        from utils.robot_util import get_gripper_state
         
         # Test gripper state
         gripper_state = get_gripper_state(env.robot)
@@ -99,7 +99,7 @@ def test_with_real_environment():
         # Test basic movement
         target_pos = env.robot.get_ee_position() + np.array([0.05, 0.0, 0.0])
         
-        from utils.robot_utils import move_to_position
+        from utils.robot_util import move_to_position
         success = move_to_position(env.sim, env.robot, target_pos, steps=20)
         
         if success:
