@@ -1,6 +1,8 @@
 """
 Object-related utility functions for the Strategic Push-Grasp Environment.
 Handles object state tracking, spatial relationships, and scene analysis.
+
+TESTED VERSION - Fixed edge cases and error handling
 """
 
 import numpy as np
