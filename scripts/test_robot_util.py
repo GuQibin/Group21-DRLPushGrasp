@@ -7,6 +7,43 @@ import numpy as np
 import sys
 from pathlib import Path
 
+
+
+
+
+
+
+
+
+
+
+
+import os
+import time
+import pybullet as p
+from datetime import datetime
+
+def _ensure_dir(path: str):
+    os.makedirs(path, exist_ok=True)
+
+def _start_video(log_dir: str, base_name: str) -> int:
+    """Start recording a PyBullet MP4 and return the log id."""
+    _ensure_dir(log_dir)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(log_dir, f"{base_name}_{ts}.mp4")
+    log_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, path)
+    print(f"[VIDEO] Recording to: {path}")
+    return log_id
+
+def _stop_video(log_id: int):
+    """Stop recording for a given PyBullet log id."""
+    try:
+        p.stopStateLogging(log_id)
+        print(f"[VIDEO] Recording stopped (log_id={log_id})")
+    except Exception as e:
+        print(f"[VIDEO] stop failed: {e}")
+
+
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -77,42 +114,48 @@ def test_gripper_functions():
 
 def test_with_real_environment():
     """
-    Test with actual PyBullet environment.
-    Only run this if PyBullet GUI works!
+    Test with an actual PyBullet environment and record a short video.
+    Only run this if the PyBullet GUI is available!
     """
-    print("\nTesting with real environment...")
-    print("  (This requires PyBullet to be working)")
-    
+    print("\nTesting with real environment (with video)...")
+    print("  (This requires PyBullet GUI: render_mode='human')")
+
+    log_id = None
     try:
         import gymnasium as gym
         import envs
-        
+
+        # Create the environment first, then start recording so the reset scene is captured
         env = gym.make("StrategicPushAndGrasp-v0", render_mode="human")
+        log_id = _start_video(log_dir="videos", base_name="test_with_real_environment")
+
         obs, info = env.reset()
-        
-        from utils.robot_util import get_gripper_state
-        
-        # Test gripper state
+        time.sleep(0.5)  # Give the camera/renderer a short moment
+
+        from utils.robot_util import get_gripper_state, move_to_position
+
         gripper_state = get_gripper_state(env.robot)
-        print(f"  ✓ Gripper state: {gripper_state}")
-        
-        # Test basic movement
+        print(f" Gripper state: {gripper_state}")
+
+        # Make a small motion so the video has some movement
         target_pos = env.robot.get_ee_position() + np.array([0.05, 0.0, 0.0])
-        
-        from utils.robot_util import move_to_position
-        success = move_to_position(env.sim, env.robot, target_pos, steps=20)
-        
-        if success:
-            print("  ✓ Basic movement works")
-        else:
-            print("  ⚠ Movement didn't reach target (this is okay for testing)")
-        
+        success = move_to_position(env.sim, env.robot, target_pos, steps=40)
+        print(" Basic movement works" if success else "  ⚠ Movement didn't fully reach target")
+
+        # Step a bit more so the clip isn’t too short
+        for _ in range(60):
+            env.sim.step()
+
         env.close()
-        print("  ✓ Environment integration works")
-        
+        print(" Environment integration works")
+
     except Exception as e:
-        print(f"  ⚠ Real environment test skipped: {e}")
-        print("  This is okay if PyBullet GUI isn't set up yet")
+        print(f" Real environment test skipped: {e}")
+        print(" This is okay if the PyBullet GUI isn't set up yet")
+    finally:
+        if log_id is not None:
+            _stop_video(log_id)
+
 
 
 if __name__ == "__main__":

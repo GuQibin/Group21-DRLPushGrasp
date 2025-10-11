@@ -51,10 +51,15 @@ def test_workspace_violation_logic():
                 'obj_outside_y': [0.0, 0.5, 0.05],
                 'obj_fell': [0.0, 0.0, -0.1]
             }
-        
+
+        # If the object name doesn't exist, raise an error so the test hits the
+        # "missing object" branch (treated as a violation).
         def get_base_position(self, name):
-            return self.positions.get(name, [0, 0, 0])
-    
+            if name not in self.positions:
+                raise KeyError(name)  # critical change: raise when missing
+            return self.positions[name]
+
+        
     sim = MockSim()
     bounds = (-0.3, 0.3, -0.3, 0.3)  # x_min, x_max, y_min, y_max
     
