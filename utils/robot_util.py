@@ -229,25 +229,40 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
         return False
 
 
-def open_gripper(sim, robot, steps: int = 20):
-    """Open gripper fully."""
+def open_gripper(sim, robot, steps: int = 20, gripper_value: float = 0.04):
+    """
+    Open gripper fully.
+    
+    Args:
+        sim: PyBullet simulation instance
+        robot: Panda robot instance
+        steps: Number of steps to execute
+        gripper_value: Target gripper width (0.04 = ~4cm = fully open)
+    """
     for _ in range(steps):
         try:
-            action = np.array([0.0, 0.0, 0.0, 1.0])  # No movement, open gripper
+            # Action: [dx, dy, dz, gripper_target]
+            # gripper_target: 0.04 for open, 0.0 for closed
+            action = np.array([0.0, 0.0, 0.0, gripper_value])
             robot.set_action(action)
-            sim.step()  # CRITICAL: Step the simulation!
+            sim.step()
         except Exception as e:
             print(f"Error opening gripper: {e}")
             break
 
 
-def close_gripper(sim, robot, steps: int = 20):
-    """Close gripper."""
+def close_gripper(sim, robot, steps: int = 20, gripper_value: float = 0.0):
+    """
+    Close gripper.
+    
+    Args:
+        gripper_value: Target gripper width (0.0 = closed)
+    """
     for _ in range(steps):
         try:
-            action = np.array([0.0, 0.0, 0.0, -1.0])  # No movement, close gripper
+            action = np.array([0.0, 0.0, 0.0, gripper_value])
             robot.set_action(action)
-            sim.step()  # CRITICAL: Step the simulation!
+            sim.step()
         except Exception as e:
             print(f"Error closing gripper: {e}")
             break
