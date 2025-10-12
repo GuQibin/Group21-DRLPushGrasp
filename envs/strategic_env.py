@@ -183,22 +183,23 @@ class StrategicPushAndGraspEnv(gym.Env):
     def _get_robot_state(self) -> Dict[str, np.ndarray]:
         robot_obs = self.robot.get_obs()
 
-        # --- 取 EE 位姿（位置仍用现有接口；姿态增加兜底） ---
+        # For orientation, check if method exists
         ee_pos = self.robot.get_ee_position()
 
         try:
-            ee_quat = self.robot.get_ee_orientation()  # 先尝试官方接口
+            ee_quat = self.robot.get_ee_orientation()  
         except AttributeError:
-            # 兜底：直接用 PyBullet 取链接姿态四元数
-            panda_uid = self.sim._bodies_idx.get("panda")  # 你的工程里 body 名一般就是 'panda'
-            ee_link = getattr(self.robot, "ee_link", None) # Panda 类通常有 ee_link 索引
+            # Fallback: Use the link the Panda class uses for EE position
+            # Look inside panda.py to find which link get_ee_position() uses
+            panda_uid = self.sim._bodies_idx.get("panda")  
+            ee_link = getattr(self.robot, "ee_link", None) 
             if panda_uid is not None and ee_link is not None:
                 ee_quat = np.array(
                     p.getLinkState(panda_uid, ee_link, computeForwardKinematics=1)[1],
                     dtype=np.float32
                 )
             else:
-                # 最保守的兜底：单位四元数
+                # For orientation, check if method exists
                 ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
 
         return {
@@ -770,3 +771,4 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
