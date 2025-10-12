@@ -213,16 +213,28 @@ class StrategicPushAndGraspEnv(gym.Env):
                 except:
                     joint_velocities[i] = 0.0
         
-        # Get gripper state (indices 7-8 in robot_obs for finger positions)
         if len(robot_obs) >= 9:
             gripper_state = np.array(robot_obs[7:9], dtype=np.float32)
         else:
             gripper_state = np.zeros(2, dtype=np.float32)
         
-        # Get EE pose using safe methods from robot_util
-        from utils.robot_util import get_ee_position_safe, get_ee_orientation_safe
-        ee_pos = get_ee_position_safe(self.robot)
-        ee_quat = get_ee_orientation_safe(self.robot)
+        # Get EE pose - use direct PyBullet access
+        ee_link = getattr(self.robot, 'ee_link', 11)
+
+        try:
+            if panda_uid is not None:
+                link_state = self.sim.physics_client.getLinkState(
+                    panda_uid, ee_link, computeForwardKinematics=1
+                )
+                ee_pos = np.array(link_state[0], dtype=np.float32)  # World position
+                ee_quat = np.array(link_state[1], dtype=np.float32)  # World orientation
+            else:
+                ee_pos = np.zeros(3, dtype=np.float32)
+                ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
+        except Exception as e:
+            print(f"Warning: Could not get EE pose: {e}")
+            ee_pos = np.zeros(3, dtype=np.float32)
+            ee_quat = np.array([0, 0, 0, 1], dtype=np.float32
     
         return {
             'joint_positions':    joint_positions,      # 7D
@@ -231,90 +243,6 @@ class StrategicPushAndGraspEnv(gym.Env):
             'ee_orientation':     ee_quat,              # 4D
             'gripper_width':      np.array([np.mean(gripper_state)], dtype=np.float32),  # 1D
         }
-
-
-
-    # def _get_robot_state(self) -> Dict[str, np.ndarray]:
-    #     # 1) 机器人原始观测
-    #     robot_obs = self.robot.get_obs()
-    #     print("[DBG] robot_obs type:", type(robot_obs), "shape:", getattr(robot_obs, "shape", None))
-    #     print("[DBG] robot_obs[:7] (q):", robot_obs[:7])
-    #     print("[DBG] robot_obs[7:14] (dq):", robot_obs[7:14])
-    #     # 14:16 常用作两指位姿，如果版本不同可能偏移，请留意输出
-    #     print("[DBG] robot_obs[14:16] (gripper fingers raw):", robot_obs[14:16])
-
-    #     # 2) 末端位置
-    #     try:
-    #         ee_pos = self.robot.get_ee_position()
-    #         print("[DBG] ee_position from Panda:", ee_pos)
-    #     except Exception as e:
-    #         print("[DBG] get_ee_position() failed:", repr(e))
-    #         ee_pos = np.array([np.nan, np.nan, np.nan], dtype=np.float32)
-
-    #     # 3) 末端姿态（首选 Panda 接口，失败则 PyBullet 兜底）
-    #     try:
-    #         ee_quat = self.robot.get_ee_orientation()
-    #         print("[DBG] ee_orientation from Panda:", ee_quat)
-    #     except AttributeError as e:
-    #         print("[DBG] get_ee_orientation() missing on Panda:", repr(e))
-    #         # 3a) 打印 sim 的 body 索引表，确认机器人 body 名称
-    #         try:
-    #             print("[DBG] sim._bodies_idx keys:", list(getattr(self.sim, "_bodies_idx", {}).keys()))
-    #         except Exception as e2:
-    #             print("[DBG] cannot read sim._bodies_idx keys:", repr(e2))
-
-    #         panda_uid = getattr(self.sim, "_bodies_idx", {}).get("panda")
-    #         print("[DBG] panda_uid (by key 'panda'):", panda_uid)
-
-    #         ee_link = getattr(self.robot, "ee_link", None)
-    #         print("[DBG] robot.ee_link:", ee_link)
-
-    #         try:
-    #             if panda_uid is not None and ee_link is not None:
-    #                 ls = p.getLinkState(panda_uid, ee_link, computeForwardKinematics=1)
-    #                 # ls[1] 是世界系四元数 (x,y,z,w)
-    #                 print("[DBG] getLinkState return len:", len(ls) if ls else None)
-    #                 print("[DBG] getLinkState[0] world pos:", ls[0] if ls else None)
-    #                 print("[DBG] getLinkState[1] world quat:", ls[1] if ls else None)
-    #                 ee_quat = np.array(ls[1], dtype=np.float32)
-    #             else:
-    #                 print("[DBG] panda_uid/ee_link is None, fallback to unit quat.")
-    #                 ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
-    #         except Exception as e3:
-    #             print("[DBG] getLinkState() failed:", repr(e3))
-    #             ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
-    #     except Exception as e:
-    #         print("[DBG] unexpected exception in get_ee_orientation():", repr(e))
-    #         ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
-
-    #     # 4) 夹爪宽度（两指平均）
-    #     try:
-    #         gripper_raw = robot_obs[14:16]
-    #         gripper_width = float(np.mean(gripper_raw))
-    #     except Exception as e:
-    #         print("[DBG] gripper width parse failed:", repr(e))
-    #         gripper_width = float("nan")
-    #     print("[DBG] gripper_width (mean of 14:16):", gripper_width)
-
-    #     # 5) 组装返回
-    #     jp = np.asarray(robot_obs[:7], dtype=np.float32)
-    #     jv = np.asarray(robot_obs[7:14], dtype=np.float32)
-    #     ee_pos = np.asarray(ee_pos, dtype=np.float32)
-    #     ee_quat = np.asarray(ee_quat, dtype=np.float32)
-    #     gw = np.array([gripper_width], dtype=np.float32)
-
-    #     print("[DBG] final shapes -> jp:", jp.shape, "jv:", jv.shape,
-    #         "ee_pos:", ee_pos.shape, "ee_quat:", ee_quat.shape, "gw:", gw.shape)
-
-    #     return {
-    #         "joint_positions": jp,
-    #         "joint_velocities": jv,
-    #         "ee_position": ee_pos,
-    #         "ee_orientation": ee_quat,
-    #         "gripper_width": gw,
-    #     }
-
-
 
     def _get_object_states(self) -> Dict[str, np.ndarray]:
         """
@@ -813,6 +741,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
