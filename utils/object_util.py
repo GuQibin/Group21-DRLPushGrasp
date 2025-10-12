@@ -14,69 +14,72 @@ def compute_shape_descriptors(object_type: str, half_extents: np.ndarray = None,
     """
     Convert object geometric properties into a shape descriptor vector.
     
-    Args:
-        object_type: "cube", "sphere", or "irregular"
-        half_extents: For cubes, the half extents [x, y, z]
-        radius: For spheres, the radius
-    
     Returns:
         Shape descriptor vector of size 8:
-        [is_cube, is_sphere, is_irregular, dim1, dim2, dim3, volume, graspability_score]
+        [0] is_cube: 1.0 if cube, else 0.0
+        [1] is_sphere: 1.0 if sphere, else 0.0
+        [2] is_irregular: 1.0 if irregular, else 0.0
+        [3] dim1: First dimension (width/diameter)
+        [4] dim2: Second dimension (depth/diameter)
+        [5] dim3: Third dimension (height/diameter)
+        [6] volume: Object volume in m³
+        [7] graspability_score: 0.0-1.0 (higher = easier to grasp)
     """
     descriptor = np.zeros(8, dtype=np.float32)
     
     if object_type == "cube":
-        descriptor[0] = 1.0  # is_cube
+        descriptor[0] = 1.0
         if half_extents is not None:
-            descriptor[3:6] = half_extents * 2  # Convert to full dimensions
-            descriptor[6] = np.prod(half_extents * 2)  # Volume
-        descriptor[7] = 0.8  # Graspability score (cubes are easy to grasp)
+            full_dims = half_extents * 2
+            descriptor[3:6] = full_dims
+            descriptor[6] = np.prod(full_dims)
+        else:
+            print("Warning: cube created without half_extents")
+        descriptor[7] = 0.8
         
     elif object_type == "sphere":
-        descriptor[1] = 1.0  # is_sphere
+        descriptor[1] = 1.0
         if radius is not None:
-            descriptor[3] = radius * 2  # Diameter
-            descriptor[4] = radius * 2
-            descriptor[5] = radius * 2
-            descriptor[6] = (4/3) * np.pi * (radius ** 3)  # Volume
-        descriptor[7] = 0.3  # Graspability score (spheres are harder to grasp)
+            diameter = radius * 2
+            descriptor[3:6] = diameter  # Same in all dimensions
+            descriptor[6] = (4/3) * np.pi * (radius ** 3)
+        else:
+            print("Warning: sphere created without radius")
+        descriptor[7] = 0.3
         
     elif object_type == "irregular":
         descriptor[2] = 1.0  # is_irregular
         descriptor[7] = 0.5  # Medium graspability
+    else:
+        print(f"Warning: Unknown object_type '{object_type}'")
     
     return descriptor
 
-
 def compute_pairwise_distance_matrix(sim, objects: Dict) -> np.ndarray:
     """
-    Compute pairwise Euclidean distances between all objects.
-    
-    Args:
-        sim: PyBullet simulation instance
-        objects: Dictionary of object names and their properties
-    
-    Returns:
-        Distance matrix D ∈ ℝ^(N×N) where D[i,j] is distance between object i and j
+    Compute pairwise Euclidean distances between all objects (vectorized).
     """
     object_names = sorted(objects.keys())
     N = len(object_names)
     
-    # Handle empty case
     if N == 0:
         return np.array([], dtype=np.float32).reshape(0, 0)
     
-    distance_matrix = np.zeros((N, N), dtype=np.float32)
-    
-    # Get all positions first (error handling)
-    positions = []
-    for name in object_names:
+    # Get all positions at once
+    positions = np.zeros((N, 2), dtype=np.float32)
+    for i, name in enumerate(object_names):
         try:
-            pos = np.array(sim.get_base_position(name)[:2])  # Only x, y
-            positions.append(pos)
+            positions[i] = sim.get_base_position(name)[:2]
         except Exception as e:
             print(f"Warning: Could not get position for {name}: {e}")
-            positions.append(np.array([0.0, 0.0], dtype=np.float32))
+            positions[i] = [0.0, 0.0]
+    
+    # Vectorized distance computation
+    # Broadcasting: (N, 1, 2) - (1, N, 2) -> (N, N, 2)
+    diff = positions[:, np.newaxis, :] - positions[np.newaxis, :, :]
+    distance_matrix = np.linalg.norm(diff, axis=2).astype(np.float32)
+    
+    return distance_matrix
     
     # Compute distances
     for i in range(N):
@@ -86,6 +89,7 @@ def compute_pairwise_distance_matrix(sim, objects: Dict) -> np.ndarray:
             distance_matrix[j, i] = dist  # Symmetric
     
     return distance_matrix
+
 
 
 def compute_occlusion_masks(sim, objects: Dict, threshold: float = 0.05) -> np.ndarray:
@@ -106,7 +110,7 @@ def compute_occlusion_masks(sim, objects: Dict, threshold: float = 0.05) -> np.n
     # Handle empty case
     if N == 0:
         return np.array([], dtype=np.int32)
-    
+
     occlusion_mask = np.zeros(N, dtype=np.int32)
     
     # Get all positions first (error handling)
@@ -114,7 +118,10 @@ def compute_occlusion_masks(sim, objects: Dict, threshold: float = 0.05) -> np.n
     for name in object_names:
         try:
             pos = np.array(sim.get_base_position(name)[:2])
-            positions.append(pos)
+            if check_z:
+                positions.append(np.array(pos))  # Full 3D
+            else:
+                positions.append(np.array(pos[:2]))  # Only XY
         except Exception as e:
             print(f"Warning: Could not get position for {name}: {e}")
             positions.append(np.array([0.0, 0.0], dtype=np.float32))
@@ -269,6 +276,7 @@ def get_safe_spawn_position(sim, existing_objects: List[str],
     Returns:
         Safe spawn position [x, y, z]
     """
+    x_min, x_max, y_min, y_max = workspace_bounds
     half_goal = goal_size / 2
     
     for attempt in range(max_attempts):
