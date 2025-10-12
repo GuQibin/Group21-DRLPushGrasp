@@ -99,7 +99,7 @@ def compute_occlusion_masks(sim, objects: Dict, threshold: float = 0.05) -> np.n
     Args:
         sim: PyBullet simulation instance
         objects: Dictionary of object names and their properties
-        threshold: Distance threshold for occlusion detection
+        threshold: Distance threshold for occlusion detection (meters)
     
     Returns:
         Occlusion mask O ∈ {0,1}^N where O[i]=1 if object i is occluded
@@ -107,21 +107,17 @@ def compute_occlusion_masks(sim, objects: Dict, threshold: float = 0.05) -> np.n
     object_names = sorted(objects.keys())
     N = len(object_names)
     
-    # Handle empty case
     if N == 0:
         return np.array([], dtype=np.int32)
 
     occlusion_mask = np.zeros(N, dtype=np.int32)
     
-    # Get all positions first (error handling)
+    # Get all positions (XY only for tabletop)
     positions = []
     for name in object_names:
         try:
             pos = np.array(sim.get_base_position(name)[:2])
-            if check_z:
-                positions.append(np.array(pos))  # Full 3D
-            else:
-                positions.append(np.array(pos[:2]))  # Only XY
+            positions.append(pos)
         except Exception as e:
             print(f"Warning: Could not get position for {name}: {e}")
             positions.append(np.array([0.0, 0.0], dtype=np.float32))
@@ -136,6 +132,7 @@ def compute_occlusion_masks(sim, objects: Dict, threshold: float = 0.05) -> np.n
                 occlusion_mask[j] = 1
     
     return occlusion_mask
+
 
 
 def analyze_scene_occlusions(sim, objects: Dict, threshold: float = 0.05) -> None:
