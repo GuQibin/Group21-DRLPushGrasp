@@ -515,32 +515,31 @@ def get_gripper_state(robot) -> dict:
         Dictionary with gripper width and status flags
     """
     try:
-        obs = robot.get_obs()
+        # CRITICAL: robot.get_obs() does NOT contain gripper state
+        # Must get from PyBullet directly
         
-        # DEBUG: Print to find correct indices
-        print(f"[DEBUG] Full obs shape: {obs.shape}")
-        print(f"[DEBUG] Obs values: {obs}")
-        
-        # Panda gripper typically at indices 7-8 or 14-15
-        # Try different indices to find the right ones
-        if len(obs) >= 16:
-            # Standard panda-gym format
-            finger_positions = obs[7:9]  # Try 7-8 first
-            gripper_width = float(np.sum(finger_positions))
-            
-            if gripper_width == 0.0:
-                # Try alternate indices
-                finger_positions = obs[14:16]
-                gripper_width = float(np.sum(finger_positions))
+        if hasattr(robot, 'sim'):
+            panda_uid = robot.sim._bodies_idx.get('panda')
+            if panda_uid is not None:
+                # Panda finger joints are 9 and 10
+                try:
+                    finger1 = robot.sim.get_joint_angle('panda', 9)
+                    finger2 = robot.sim.get_joint_angle('panda', 10)
+                    gripper_width = float(finger1 + finger2)
+                except Exception as e:
+                    print(f"[DEBUG] Could not read gripper joints: {e}")
+                    gripper_width = 0.0
+            else:
+                gripper_width = 0.0
         else:
             gripper_width = 0.0
         
-        print(f"[DEBUG] Gripper width: {gripper_width}")
+        print(f"[DEBUG] Gripper width from joints 9+10: {gripper_width:.6f}")
         
         return {
             'width': gripper_width,
-            'is_closed': gripper_width < 0.01,
-            'is_open': gripper_width > 0.07
+            'is_closed': gripper_width < 0.005,  # Less than 5mm total
+            'is_open': gripper_width > 0.07      # More than 7cm total
         }
     except Exception as e:
         print(f"  ⚠ Error getting gripper state: {e}")
