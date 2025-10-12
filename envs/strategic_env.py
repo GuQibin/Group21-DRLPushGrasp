@@ -422,7 +422,7 @@ class StrategicPushAndGraspEnv(gym.Env):
                 occlusion_mask.astype(np.float32)
             ])
         
-        return np.concatenate(obs_components)
+        return np.concatenate(obs_components).astype(np.float32) 
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """
@@ -771,4 +771,5 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
