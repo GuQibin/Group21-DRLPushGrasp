@@ -8,4 +8,4 @@
 | test_objects_util | PASS |  |
 | test_physics_util | PASS |  |
 | test_robot_util | PASS |  |
-| test_state_action | FAIL |  |
+| test_state_action | PASS |  |
