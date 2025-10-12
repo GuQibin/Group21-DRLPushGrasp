@@ -334,6 +334,28 @@ def test_push_dry_run():
         if log_id is not None:
             _stop_video(log_id)
 
+def test_robot_diagnostics():
+    """Run robot control diagnostics"""
+    print("\nRunning robot diagnostics...")
+    
+    try:
+        import gymnasium as gym
+        import envs
+        from utils.robot_util import diagnose_robot_control
+        
+        env = gym.make("StrategicPushAndGrasp-v0", render_mode="human")
+        obs, info = env.reset()
+        
+        # Run diagnostics
+        diagnose_robot_control(env.unwrapped.robot, env.unwrapped.sim, steps=10)
+        
+        env.close()
+        
+    except Exception as e:
+        print(f" Diagnostics failed: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 if __name__ == "__main__":
     print("=" * 60)
@@ -367,6 +389,11 @@ if __name__ == "__main__":
             import traceback
             traceback.print_exc()
             all_passed = False
+    
+    print("\n" + "=" * 60)
+    print("ROBOT DIAGNOSTICS")
+    print("=" * 60)
+    test_robot_diagnostics()
     
     # Test 6-8: Integration tests (require PyBullet - optional)
     integration_tests = [
