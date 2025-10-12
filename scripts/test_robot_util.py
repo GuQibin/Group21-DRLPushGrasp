@@ -356,8 +356,9 @@ def test_robot_diagnostics():
         print(f"  ⚠ Diagnostics failed: {e}")
         import traceback
         traceback.print_exc()
-Then modify the if __name__ == "__main__": section:
-pythonif __name__ == "__main__":
+
+
+if __name__ == "__main__":
     print("=" * 60)
     print("Testing utils/robot_util.py")
     print("=" * 60 + "\n")
