@@ -96,7 +96,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.robot = Panda(
             self.sim,
             block_gripper=False,
-            base_position=np.array([0.4, -0.3, 0.0])
+            base_position=np.array([0.0, 0.0, 0.0])
         )
         print("✓ Robot: 7-DOF Panda at position [0.4, -0.3, 0.0]")
         
@@ -720,6 +720,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
