@@ -95,7 +95,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.sim = PyBullet(render_mode=render_mode)
         self.robot = Panda(
             self.sim,
-            block_gripper=False,  # Enable gripper control
+            block_gripper=False,
             base_position=np.array([0.4, -0.3, 0.0])
         )
         print("✓ Robot: 7-DOF Panda at position [0.4, -0.3, 0.0]")
@@ -105,7 +105,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         print("✓ Action space: 4D continuous [-1, 1]")
         
         # 3. Scene parameters
-        self.objects = {}  # Dictionary: name -> properties
+        self.objects = {}
         self.goal_pos = np.array([-0.2, -0.2])
         self.goal_size = 0.1
         self.table_bounds = np.array([0.4, 0.4])
@@ -124,15 +124,19 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.previous_occlusion_states = {}
         self.action_was_successful = True
         
-        # 6. Define observation space with FIXED dimensions based on MAX_OBJECTS
+        # 6. Define observation space with FIXED dimensions (PADDED to MAX_OBJECTS)
         # Formula: 28 + MAX_OBJECTS*21 + MAX_OBJECTS² + MAX_OBJECTS
+        # = 22 (robot) + 6 (env) + 21*10 (objects) + 10² (distance) + 10 (occlusion)
+        # = 22 + 6 + 210 + 100 + 10 = 348
         obs_dim = 28 + self.MAX_OBJECTS * 21 + self.MAX_OBJECTS**2 + self.MAX_OBJECTS
         self.observation_space = spaces.Box(
             -np.inf, np.inf,
             shape=(obs_dim,),
             dtype=np.float32
         )
-        print(f"✓ Observation space: {obs_dim}D (28 + {self.MAX_OBJECTS}×21 + {self.MAX_OBJECTS}² + {self.MAX_OBJECTS})")
+        print(f"✓ Observation space: {obs_dim}D")
+        print(f"  Formula: 28 + {self.MAX_OBJECTS}×21 + {self.MAX_OBJECTS}² + {self.MAX_OBJECTS}")
+        print(f"  = 22 (robot) + 6 (env) + 210 (objects) + 100 (dist) + 10 (occl)")
         print("=" * 70 + "\n")
 
     def _draw_goal_square(self):
@@ -181,33 +185,52 @@ class StrategicPushAndGraspEnv(gym.Env):
     #     }
 
     def _get_robot_state(self) -> Dict[str, np.ndarray]:
-        robot_obs = self.robot.get_obs()
+    """
+    Get complete robot state (22D).
+    
+    Returns:
+        Dictionary with:
+        - joint_positions: 7D
+        - joint_velocities: 7D
+        - ee_position: 3D
+        - ee_orientation: 4D (quaternion)
+        - gripper_width: 1D
+    """
+    robot_obs = self.robot.get_obs()
+    
+    # Get joint positions from observation (first 7 elements)
+    joint_positions = np.array(robot_obs[:7], dtype=np.float32)
+    
+    # Get joint VELOCITIES directly from PyBullet (NOT in robot.get_obs())
+    joint_velocities = np.zeros(7, dtype=np.float32)
+    panda_uid = self.sim._bodies_idx.get("panda")
+    
+    if panda_uid is not None:
+        # Panda has 7 arm joints (indices 0-6)
+        for i in range(7):
+            try:
+                joint_velocities[i] = self.sim.get_joint_velocity("panda", i)
+            except:
+                joint_velocities[i] = 0.0
+    
+    # Get gripper state (indices 7-8 in robot_obs for finger positions)
+    if len(robot_obs) >= 9:
+        gripper_state = np.array(robot_obs[7:9], dtype=np.float32)
+    else:
+        gripper_state = np.zeros(2, dtype=np.float32)
+    
+    # Get EE pose using safe methods from robot_util
+    from utils.robot_util import get_ee_position_safe, get_ee_orientation_safe
+    ee_pos = get_ee_position_safe(self.robot)
+    ee_quat = get_ee_orientation_safe(self.robot)
 
-        # --- 取 EE 位姿（位置仍用现有接口；姿态增加兜底） ---
-        ee_pos = self.robot.get_ee_position()
-
-        try:
-            ee_quat = self.robot.get_ee_orientation()  # 先尝试官方接口
-        except AttributeError:
-            # 兜底：直接用 PyBullet 取链接姿态四元数
-            panda_uid = self.sim._bodies_idx.get("panda")  # 你的工程里 body 名一般就是 'panda'
-            ee_link = getattr(self.robot, "ee_link", None) # Panda 类通常有 ee_link 索引
-            if panda_uid is not None and ee_link is not None:
-                ee_quat = np.array(
-                    p.getLinkState(panda_uid, ee_link, computeForwardKinematics=1)[1],
-                    dtype=np.float32
-                )
-            else:
-                # 最保守的兜底：单位四元数
-                ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
-
-        return {
-            'joint_positions':    robot_obs[:7],
-            'joint_velocities':   robot_obs[7:14],
-            'ee_position':        ee_pos,
-            'ee_orientation':     ee_quat,
-            'gripper_width':      np.array([np.mean(robot_obs[14:16])], dtype=np.float32),
-        }
+    return {
+        'joint_positions':    joint_positions,      # 7D
+        'joint_velocities':   joint_velocities,     # 7D ✓ Now correct!
+        'ee_position':        ee_pos,               # 3D
+        'ee_orientation':     ee_quat,              # 4D
+        'gripper_width':      np.array([np.mean(gripper_state)], dtype=np.float32),  # 1D
+    }
 
 
 
@@ -359,14 +382,14 @@ class StrategicPushAndGraspEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         """
-        Construct complete observation vector.
+        Construct complete observation vector WITH PADDING to MAX_OBJECTS.
         
-        Structure (28 + 22N + N²):
+        Structure (28 + 22*MAX_OBJECTS + MAX_OBJECTS²):
         - Robot state: 22D
         - Environment info: 6D
-        - Object states: N×21D
-        - Distance matrix: N×N
-        - Occlusion mask: N
+        - Object states: MAX_OBJECTS×21D (padded with zeros)
+        - Distance matrix: MAX_OBJECTS×MAX_OBJECTS (padded with zeros)
+        - Occlusion mask: MAX_OBJECTS (padded with zeros)
         
         Returns:
             Flattened observation array
@@ -381,9 +404,19 @@ class StrategicPushAndGraspEnv(gym.Env):
             robot['gripper_width']         # 1D
         ])
         
-        # 2. Object states (N×21D)
+        # 2. Environment information (6D)
+        N = len(self.objects)  # Actual number of objects
+        env_info = np.array([
+            self.goal_pos[0],      # Goal X
+            self.goal_pos[1],      # Goal Y
+            self.goal_size,        # Goal size
+            self.table_bounds[0],  # Table X bound
+            self.table_bounds[1],  # Table Y bound
+            float(N)               # Actual number of objects
+        ], dtype=np.float32)
+        
+        # 3. Object states (MAX_OBJECTS×21D) - PADDED
         objects = self._get_object_states()
-        N = len(self.objects)
         
         # Create padded arrays
         positions_padded = np.zeros((self.MAX_OBJECTS, 3), dtype=np.float32)
@@ -407,9 +440,9 @@ class StrategicPushAndGraspEnv(gym.Env):
             shape_descriptors_padded.flatten()    # MAX_OBJECTS×8
         ])
         
-        # 3. Spatial relationships
+        # 4. Spatial relationships (PADDED)
         spatial = self._get_spatial_relationships()
-    
+        
         # Pad distance matrix to MAX_OBJECTS × MAX_OBJECTS
         distance_matrix_padded = np.zeros((self.MAX_OBJECTS, self.MAX_OBJECTS), dtype=np.float32)
         if N > 0:
@@ -420,24 +453,16 @@ class StrategicPushAndGraspEnv(gym.Env):
         if N > 0:
             occlusion_mask_padded[:N] = spatial['occlusion_mask'].astype(np.float32)
         
-        # 4. Environment information (6D)
-        env_info = np.array([
-            self.goal_pos[0],      # Goal X
-            self.goal_pos[1],      # Goal Y
-            self.goal_size,        # Goal size
-            self.table_bounds[0],  # Table X bound
-            self.table_bounds[1],  # Table Y bound
-            float(N)               # Actual number of objects
-        ], dtype=np.float32)
-        
         # 5. Concatenate all components
+        # Total: 22 + 6 + (21*MAX_OBJECTS) + MAX_OBJECTS² + MAX_OBJECTS
         obs = np.concatenate([
             robot_vector,                      # 22D
             env_info,                          # 6D
-            object_vector,                     # MAX_OBJECTS×21D
-            distance_matrix_padded.flatten(),  # MAX_OBJECTS²
-            occlusion_mask_padded              # MAX_OBJECTS
+            object_vector,                     # MAX_OBJECTS×21D = 210D
+            distance_matrix_padded.flatten(),  # MAX_OBJECTS² = 100D
+            occlusion_mask_padded              # MAX_OBJECTS = 10D
         ])
+        # Total: 22 + 6 + 210 + 100 + 10 = 348D ✓
         
         return obs
 
@@ -788,4 +813,5 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
