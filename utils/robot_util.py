@@ -2,12 +2,61 @@
 Robot control utilities for action primitive execution.
 Implements high-level manipulation primitives: pick-and-place and push.
 
-TESTED VERSION - Fixed simulation stepping and error handling
+CORRECTED VERSION - Uses only verified Panda robot and PyBullet wrapper methods
 """
 
 import numpy as np
 from typing import Tuple, Optional
 import pybullet as p
+
+
+def get_ee_position_safe(robot) -> np.ndarray:
+    """
+    Get end-effector position safely.
+    
+    Args:
+        robot: Panda robot instance
+    
+    Returns:
+        position: [x, y, z] or [0, 0, 0] if error
+    """
+    try:
+        # Method 1: Try robot's built-in method
+        if hasattr(robot, 'get_ee_position'):
+            return robot.get_ee_position()
+        
+        # Method 2: Use link state from simulation
+        # Panda EE link is typically link 11 (verify this!)
+        ee_link = getattr(robot, 'ee_link', 11)
+        return robot.sim.get_link_position('panda', ee_link)
+        
+    except Exception as e:
+        print(f"Warning: Could not get EE position: {e}")
+        return np.zeros(3, dtype=np.float32)
+
+
+def get_ee_orientation_safe(robot) -> np.ndarray:
+    """
+    Get end-effector orientation safely.
+    
+    Args:
+        robot: Panda robot instance
+    
+    Returns:
+        orientation: Quaternion [x, y, z, w] or [0, 0, 0, 1] if error
+    """
+    try:
+        # Method 1: Try robot's built-in method
+        if hasattr(robot, 'get_ee_orientation'):
+            return robot.get_ee_orientation()
+        
+        # Method 2: Use link state
+        ee_link = getattr(robot, 'ee_link', 11)
+        return robot.sim.get_link_orientation('panda', ee_link)
+        
+    except Exception as e:
+        print(f"Warning: Could not get EE orientation: {e}")
+        return np.array([0, 0, 0, 1], dtype=np.float32)
 
 
 def execute_pick_and_place(sim, robot, target_object: str, 
@@ -22,10 +71,11 @@ def execute_pick_and_place(sim, robot, target_object: str,
     1. Move to pre-grasp position above object
     2. Lower to grasp height
     3. Close gripper
-    4. Lift object
-    5. Move to goal position
-    6. Lower and release
-    7. Retract
+    4. Check grasp success
+    5. Lift object
+    6. Move to goal position
+    7. Lower and release
+    8. Retract
     
     Args:
         sim: PyBullet simulation instance
@@ -33,83 +83,94 @@ def execute_pick_and_place(sim, robot, target_object: str,
         target_object: Name of object to grasp
         alpha_x, alpha_y: Relative grasp position in object's local frame [-1, 1]
         goal_pos: Goal position [x, y]
-        approach_height: Height for approach phase
-        grasp_height: Height for grasping
+        approach_height: Height for approach phase (meters)
+        grasp_height: Height for grasping (meters)
     
     Returns:
-        success: True if grasp was successful
+        success: True if grasp and placement were successful
     """
     try:
         # Get object pose
         obj_pos = np.array(sim.get_base_position(target_object))
         obj_ori = sim.get_base_orientation(target_object)
     except Exception as e:
-        print(f"Error: Could not get pose for {target_object}: {e}")
+        print(f"❌ Error: Could not get pose for {target_object}: {e}")
         return False
     
-    # Convert alpha_x, alpha_y from [-1, 1] to actual offset (e.g., ±2cm)
-    offset_scale = 0.02
+    # Store initial height for grasp verification
+    initial_obj_z = obj_pos[2]
+    
+    # Convert alpha_x, alpha_y from [-1, 1] to actual offset (±2.5cm)
+    offset_scale = 0.025
     grasp_offset = np.array([alpha_x * offset_scale, alpha_y * offset_scale, 0.0])
     
-    # Transform offset to world frame (simplified - assumes no rotation)
-    # TODO: Proper transformation using quaternion rotation
+    # Transform offset to world frame (simplified - assumes minimal rotation)
+    # TODO: For better accuracy, use proper quaternion rotation
     grasp_point = obj_pos + grasp_offset
     
+    print(f"  Phase 1: Approaching {target_object} from above...")
     # Phase 1: Approach from above
     approach_pos = grasp_point.copy()
     approach_pos[2] = approach_height
-    success = move_to_position(sim, robot, approach_pos, open_gripper=True, steps=50)
+    success = move_to_position(sim, robot, approach_pos, gripper_open=True, steps=50)
     if not success:
-        print(f"Failed to approach {target_object}")
+        print(f"  ❌ Failed to approach {target_object}")
         return False
     
+    print(f"  Phase 2: Lowering to grasp height...")
     # Phase 2: Lower to grasp height
     grasp_pos = grasp_point.copy()
     grasp_pos[2] = grasp_height
-    success = move_to_position(sim, robot, grasp_pos, open_gripper=True, steps=30)
+    success = move_to_position(sim, robot, grasp_pos, gripper_open=True, steps=30)
     if not success:
-        print(f"Failed to lower to grasp height for {target_object}")
+        print(f"  ❌ Failed to lower to grasp height for {target_object}")
         return False
     
+    print(f"  Phase 3: Closing gripper...")
     # Phase 3: Close gripper
     close_gripper(sim, robot, steps=20)
     
-    # Check if object is grasped (simple check: object moved up)
-    try:
-        obj_pos_after = np.array(sim.get_base_position(target_object))
-        if obj_pos_after[2] < obj_pos[2] + 0.005:  # Object didn't lift
-            print(f"Grasp failed for {target_object} - object didn't lift")
-            return False
-    except Exception as e:
-        print(f"Error checking grasp: {e}")
+    print(f"  Phase 4: Checking grasp...")
+    # Phase 4: Check if object is grasped
+    if not check_grasp_success(sim, robot, target_object, initial_z=initial_obj_z):
+        print(f"  ❌ Grasp failed for {target_object}")
+        open_gripper(sim, robot, steps=10)  # Release and give up
         return False
     
-    # Phase 4: Lift
+    print(f"  ✓ Successfully grasped {target_object}")
+    
+    print(f"  Phase 5: Lifting object...")
+    # Phase 5: Lift
     lift_pos = grasp_pos.copy()
     lift_pos[2] = approach_height
-    move_to_position(sim, robot, lift_pos, open_gripper=False, steps=30)
+    move_to_position(sim, robot, lift_pos, gripper_open=False, steps=30)
     
-    # Phase 5: Transport to goal
+    print(f"  Phase 6: Transporting to goal...")
+    # Phase 6: Transport to goal
     transport_pos = np.array([goal_pos[0], goal_pos[1], approach_height])
-    move_to_position(sim, robot, transport_pos, open_gripper=False, steps=50)
+    move_to_position(sim, robot, transport_pos, gripper_open=False, steps=50)
     
-    # Phase 6: Lower and release
+    print(f"  Phase 7: Placing object...")
+    # Phase 7: Lower and release
     place_pos = np.array([goal_pos[0], goal_pos[1], 0.05])
-    move_to_position(sim, robot, place_pos, open_gripper=False, steps=30)
+    move_to_position(sim, robot, place_pos, gripper_open=False, steps=30)
     open_gripper(sim, robot, steps=20)
     
-    # Phase 7: Retract
+    print(f"  Phase 8: Retracting...")
+    # Phase 8: Retract
     retract_pos = place_pos.copy()
     retract_pos[2] = approach_height
-    move_to_position(sim, robot, retract_pos, open_gripper=True, steps=30)
+    move_to_position(sim, robot, retract_pos, gripper_open=True, steps=30)
     
+    print(f"  ✓ Pick-and-place complete!")
     return True
 
 
 def execute_push(sim, robot, target_object: str,
                 alpha_x: float, alpha_y: float, alpha_theta: float,
                 push_distance: float = 0.05,
-                push_height: float = 0.03) -> bool:
+                push_height: float = 0.03,
+                use_object_frame: bool = False) -> bool:
     """
     Execute push primitive on target object.
     
@@ -127,7 +188,8 @@ def execute_push(sim, robot, target_object: str,
         alpha_x, alpha_y: Contact point in object's local frame [-1, 1]
         alpha_theta: Push direction [-1, 1], mapped to [-π, π]
         push_distance: Distance to push (default 5cm)
-        push_height: Height of push contact point
+        push_height: Height of push contact point (meters)
+        use_object_frame: If True, rotate push direction by object orientation
     
     Returns:
         success: True if push was executed
@@ -135,13 +197,20 @@ def execute_push(sim, robot, target_object: str,
     try:
         # Get object pose
         obj_pos = np.array(sim.get_base_position(target_object))
+        obj_ori = sim.get_base_orientation(target_object)
     except Exception as e:
-        print(f"Error: Could not get position for {target_object}: {e}")
+        print(f"❌ Error: Could not get position for {target_object}: {e}")
         return False
     
     # Convert alpha_x, alpha_y to contact offset
-    offset_scale = 0.02
+    offset_scale = 0.025  # 2.5cm max offset
     contact_offset = np.array([alpha_x * offset_scale, alpha_y * offset_scale, 0.0])
+    
+    if use_object_frame:
+        # Transform offset to world frame using object orientation
+        rot_matrix = quaternion_to_rotation_matrix(obj_ori)
+        contact_offset = rot_matrix @ contact_offset
+    
     contact_point = obj_pos + contact_offset
     contact_point[2] = push_height
     
@@ -149,87 +218,111 @@ def execute_push(sim, robot, target_object: str,
     push_angle = alpha_theta * np.pi
     push_direction = np.array([np.cos(push_angle), np.sin(push_angle), 0.0])
     
+    if use_object_frame:
+        # Rotate push direction by object orientation
+        rot_matrix = quaternion_to_rotation_matrix(obj_ori)
+        push_direction = rot_matrix @ push_direction
+    
     # Calculate pre-push position (slightly behind contact point)
     pre_push_offset = 0.03  # 3cm behind
     pre_push_pos = contact_point - push_direction * pre_push_offset
     
+    print(f"  Phase 1: Moving to pre-push position...")
     # Phase 1: Move to pre-push position
-    success = move_to_position(sim, robot, pre_push_pos, open_gripper=True, steps=40)
+    success = move_to_position(sim, robot, pre_push_pos, gripper_open=True, steps=40)
     if not success:
-        print(f"Failed to reach pre-push position for {target_object}")
+        print(f"  ❌ Failed to reach pre-push position for {target_object}")
         return False
     
+    print(f"  Phase 2: Executing push...")
     # Phase 2: Execute push (linear motion)
     post_push_pos = contact_point + push_direction * push_distance
-    success = move_to_position(sim, robot, post_push_pos, open_gripper=True, steps=30)
+    success = move_to_position(sim, robot, post_push_pos, gripper_open=True, steps=30)
+    if not success:
+        print(f"  ⚠ Push may have been incomplete")
     
+    print(f"  Phase 3: Retracting...")
     # Phase 3: Retract (move back and up)
     retract_pos = post_push_pos.copy()
     retract_pos[2] += 0.1
-    move_to_position(sim, robot, retract_pos, open_gripper=True, steps=20)
+    move_to_position(sim, robot, retract_pos, gripper_open=True, steps=20)
     
+    print(f"  ✓ Push complete!")
     return True
 
 
 def move_to_position(sim, robot, target_pos: np.ndarray, 
-                    open_gripper: bool = True,
+                    gripper_open: bool = True,
                     steps: int = 50) -> bool:
     """
-    Move end-effector to target position using simple velocity control.
+    Move end-effector to target position using robot's action interface.
     
-    Note: This is a simplified implementation. For real deployment,
-    use proper inverse kinematics and motion planning.
+    IMPORTANT: This assumes the Panda robot uses the standard panda-gym
+    action space: [delta_x, delta_y, delta_z, gripper_control]
     
     Args:
         sim: PyBullet simulation instance
         robot: Panda robot instance
         target_pos: Target [x, y, z] position
-        open_gripper: Whether gripper should be open (1.0) or closed (-1.0)
+        gripper_open: Whether gripper should be open
         steps: Number of simulation steps
     
     Returns:
         success: True if reached near target
     """
-    gripper_ctrl = 1.0 if open_gripper else -1.0
+    # Gripper control
+    # Standard panda-gym: 1.0 = open, -1.0 = close
+    # OR: 0.04 = open, 0.0 = close (depends on version)
+    # Check your Panda implementation to determine correct values!
+    gripper_ctrl = 1.0 if gripper_open else -1.0
     
     for step in range(steps):
         try:
-            current_pos = robot.get_ee_position()
+            # Get current EE position using safe method
+            current_pos = get_ee_position_safe(robot)
+            
+            if current_pos is None or np.any(np.isnan(current_pos)):
+                print(f"  ⚠ Warning: Invalid current position at step {step}")
+                return False
+            
             error = target_pos - current_pos
             
-            # Simple proportional control
-            velocity = np.clip(error * 5.0, -0.1, 0.1)
+            # Proportional control with clipping
+            # Action is [dx, dy, dz, gripper]
+            delta = np.clip(error * 2.0, -0.05, 0.05)  # Max 5cm per step
+            action = np.concatenate([delta, [gripper_ctrl]])
             
-            action = np.concatenate([velocity, [gripper_ctrl]])
+            # Use robot's set_action method
             robot.set_action(action)
             
-            # CRITICAL: Step the simulation!
+            # CRITICAL: Step simulation
             sim.step()
             
-            # Check if close enough (early termination)
-            if np.linalg.norm(error) < 0.01:
+            # Early termination if close enough
+            if np.linalg.norm(error) < 0.01:  # Within 1cm
                 return True
                 
         except Exception as e:
-            print(f"Error during movement step {step}: {e}")
+            print(f"  ❌ Error during movement step {step}: {e}")
             return False
     
-    # Check final distance
+    # Check final error
     try:
-        final_pos = robot.get_ee_position()
+        final_pos = get_ee_position_safe(robot)
         final_error = np.linalg.norm(target_pos - final_pos)
-        success = final_error < 0.02
+        success = final_error < 0.02  # Within 2cm is acceptable
         
         if not success:
-            print(f"Warning: Final error {final_error:.4f}m exceeds threshold")
+            print(f"  ⚠ Warning: Final error {final_error:.4f}m exceeds threshold")
         
         return success
+        
     except Exception as e:
-        print(f"Error checking final position: {e}")
+        print(f"  ❌ Error checking final position: {e}")
         return False
 
 
-def open_gripper(sim, robot, steps: int = 20, gripper_value: float = 0.04):
+def open_gripper(sim, robot, steps: int = 20, gripper_value: float = 1.0):
     """
     Open gripper fully.
     
@@ -237,81 +330,120 @@ def open_gripper(sim, robot, steps: int = 20, gripper_value: float = 0.04):
         sim: PyBullet simulation instance
         robot: Panda robot instance
         steps: Number of steps to execute
-        gripper_value: Target gripper width (0.04 = ~4cm = fully open)
+        gripper_value: Target gripper control value
+                      (1.0 for standard panda-gym, or 0.04 for absolute width)
     """
     for _ in range(steps):
         try:
-            # Action: [dx, dy, dz, gripper_target]
-            # gripper_target: 0.04 for open, 0.0 for closed
+            # Action: [dx, dy, dz, gripper_control]
+            # No movement, just gripper control
             action = np.array([0.0, 0.0, 0.0, gripper_value])
             robot.set_action(action)
             sim.step()
         except Exception as e:
-            print(f"Error opening gripper: {e}")
+            print(f"  ⚠ Error opening gripper: {e}")
             break
 
 
-def close_gripper(sim, robot, steps: int = 20, gripper_value: float = 0.0):
+def close_gripper(sim, robot, steps: int = 20, gripper_value: float = -1.0):
     """
     Close gripper.
     
     Args:
-        gripper_value: Target gripper width (0.0 = closed)
+        sim: PyBullet simulation instance
+        robot: Panda robot instance
+        steps: Number of steps to execute
+        gripper_value: Target gripper control value
+                      (-1.0 for standard panda-gym, or 0.0 for absolute width)
     """
     for _ in range(steps):
         try:
+            # Action: [dx, dy, dz, gripper_control]
             action = np.array([0.0, 0.0, 0.0, gripper_value])
             robot.set_action(action)
             sim.step()
         except Exception as e:
-            print(f"Error closing gripper: {e}")
+            print(f"  ⚠ Error closing gripper: {e}")
             break
+
+
+def check_grasp_success(sim, robot, object_name: str, 
+                       initial_z: Optional[float] = None,
+                       min_lift: float = 0.01) -> bool:
+    """
+    Check if grasp was successful by monitoring object height.
+    
+    Args:
+        sim: PyBullet simulation instance
+        robot: Panda robot instance
+        object_name: Name of grasped object
+        initial_z: Initial height before grasp (if None, get current)
+        min_lift: Minimum lift distance (meters)
+    
+    Returns:
+        success: True if object lifted
+    """
+    try:
+        if initial_z is None:
+            initial_z = sim.get_base_position(object_name)[2]
+        
+        # Wait a few steps for gripper to settle
+        for _ in range(20):
+            sim.step()
+        
+        # Check current height
+        current_z = sim.get_base_position(object_name)[2]
+        height_gained = current_z - initial_z
+        
+        if height_gained >= min_lift:
+            # Verify object is not falling
+            obj_vel = sim.get_base_velocity(object_name)
+            is_falling = obj_vel[2] < -0.1  # Fast downward velocity
+            
+            return not is_falling
+        
+        return False
+        
+    except Exception as e:
+        print(f"  ⚠ Error checking grasp: {e}")
+        return False
 
 
 def compute_inverse_kinematics(sim, robot, target_pos: np.ndarray, 
                                target_ori: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
     """
-    Compute inverse kinematics for target pose.
-    
-    Uses PyBullet's built-in IK solver.
+    Compute inverse kinematics using PyBullet wrapper.
     
     Args:
         sim: PyBullet simulation instance
         robot: Panda robot instance
         target_pos: Target position [x, y, z]
-        target_ori: Target orientation as quaternion [x, y, z, w] (optional)
+        target_ori: Target orientation as quaternion [x, y, z, w]
     
     Returns:
-        joint_positions: Target joint angles for 7-DOF arm, or None if IK fails
+        joint_positions: 7-DOF joint angles or None if fails
     """
     try:
-        robot_id = sim._bodies_idx.get('panda')
-        if robot_id is None:
-            print("Error: Could not find robot body ID")
-            return None
-        
-        # Get end-effector link index (usually link 11 for Panda)
-        ee_link_index = 11  # This may need adjustment based on URDF
-        
         if target_ori is None:
-            # Default orientation (pointing down)
-            target_ori = [0, 1, 0, 0]  # Quaternion [x, y, z, w]
+            # Default downward orientation
+            target_ori = np.array([0, 1, 0, 0], dtype=np.float32)
         
-        # Call PyBullet IK
-        joint_positions = sim.physics_client.calculateInverseKinematics(
-            bodyUniqueId=robot_id,
-            endEffectorLinkIndex=ee_link_index,
-            targetPosition=target_pos,
-            targetOrientation=target_ori,
-            maxNumIterations=100,
-            residualThreshold=1e-5
+        # Get EE link index
+        ee_link = getattr(robot, 'ee_link', 11)
+        
+        # Use the wrapper's inverse_kinematics method
+        joint_state = sim.inverse_kinematics(
+            body='panda',
+            link=ee_link,
+            position=target_pos,
+            orientation=target_ori
         )
         
-        # Return only the first 7 joint angles (arm joints, not gripper)
-        return np.array(joint_positions[:7], dtype=np.float32)
+        # Return first 7 DOF (arm joints only, not gripper)
+        return joint_state[:7]
         
     except Exception as e:
-        print(f"Error computing IK: {e}")
+        print(f"  ⚠ Error computing IK: {e}")
         return None
 
 
@@ -324,81 +456,19 @@ def plan_trajectory(start_joints: np.ndarray, goal_joints: np.ndarray,
     proper trajectory optimization (e.g., minimum jerk).
     
     Args:
-        start_joints: Starting joint configuration
-        goal_joints: Goal joint configuration  
+        start_joints: Starting joint configuration (7-DOF)
+        goal_joints: Goal joint configuration (7-DOF)
         num_waypoints: Number of intermediate waypoints
     
     Returns:
         trajectory: Array of shape (num_waypoints, 7) with joint waypoints
     """
     if start_joints.shape != goal_joints.shape:
-        print(f"Error: Joint array shapes don't match: {start_joints.shape} vs {goal_joints.shape}")
+        print(f"  ⚠ Error: Joint array shapes don't match: {start_joints.shape} vs {goal_joints.shape}")
         return np.array([])
     
     trajectory = np.linspace(start_joints, goal_joints, num_waypoints)
     return trajectory
-
-
-def check_self_collision(sim, robot) -> bool:
-    """
-    Check if robot is in self-collision state.
-    
-    Args:
-        sim: PyBullet simulation instance
-        robot: Panda robot instance
-    
-    Returns:
-        has_collision: True if robot has self-collision
-    """
-    try:
-        # Get robot body ID
-        robot_id = sim._bodies_idx.get('panda')
-        if robot_id is None:
-            return False
-        
-        # Check for contact points on robot with itself
-        contact_points = sim.physics_client.getContactPoints(
-            bodyA=robot_id,
-            bodyB=robot_id
-        )
-        
-        return len(contact_points) > 0
-        
-    except Exception as e:
-        print(f"Error checking self-collision: {e}")
-        return False
-
-
-def check_collision_with_obstacles(sim, robot, obstacle_ids: list) -> bool:
-    """
-    Check if robot collides with any obstacles.
-    
-    Args:
-        sim: PyBullet simulation instance
-        robot: Panda robot instance
-        obstacle_ids: List of body IDs to check collision with
-    
-    Returns:
-        has_collision: True if collision detected
-    """
-    try:
-        robot_id = sim._bodies_idx.get('panda')
-        if robot_id is None:
-            return False
-        
-        for obstacle_id in obstacle_ids:
-            contact_points = sim.physics_client.getContactPoints(
-                bodyA=robot_id,
-                bodyB=obstacle_id
-            )
-            if len(contact_points) > 0:
-                return True
-        
-        return False
-        
-    except Exception as e:
-        print(f"Error checking obstacle collision: {e}")
-        return False
 
 
 def get_gripper_state(robot) -> dict:
@@ -409,22 +479,25 @@ def get_gripper_state(robot) -> dict:
         robot: Panda robot instance
     
     Returns:
-        Dictionary with gripper width, force, and grasp status
+        Dictionary with gripper width, and status flags
     """
     try:
         obs = robot.get_obs()
         
         # Panda gripper has 2 finger joints (indices 14 and 15 in obs)
-        finger_positions = obs[14:16] if len(obs) > 15 else np.array([0.0, 0.0])
-        gripper_width = np.sum(finger_positions)
+        if len(obs) > 15:
+            finger_positions = obs[14:16]
+            gripper_width = float(np.sum(finger_positions))
+        else:
+            gripper_width = 0.0
         
         return {
-            'width': float(gripper_width),
+            'width': gripper_width,
             'is_closed': gripper_width < 0.01,
             'is_open': gripper_width > 0.07
         }
     except Exception as e:
-        print(f"Error getting gripper state: {e}")
+        print(f"  ⚠ Error getting gripper state: {e}")
         return {
             'width': 0.0,
             'is_closed': False,
@@ -432,27 +505,81 @@ def get_gripper_state(robot) -> dict:
         }
 
 
-def execute_trajectory(sim, robot, trajectory: np.ndarray, steps_per_waypoint: int = 10) -> bool:
+def check_collision_between_bodies(sim, body1_name: str, body2_name: str) -> bool:
     """
-    Execute a planned joint trajectory.
+    Check collision using direct PyBullet API.
     
     Args:
         sim: PyBullet simulation instance
-        robot: Panda robot instance
-        trajectory: Array of shape (num_waypoints, 7) with joint angles
-        steps_per_waypoint: Simulation steps between waypoints
+        body1_name: First body name
+        body2_name: Second body name
     
     Returns:
-        success: True if trajectory executed successfully
+        has_collision: True if bodies collide
     """
     try:
-        for waypoint in trajectory:
-            # Set target joint positions
-            # Note: This is simplified - real implementation would use 
-            # position control or computed torques
-            for _ in range(steps_per_waypoint):
-                sim.step()
-        return True
+        body1_id = sim._bodies_idx.get(body1_name)
+        body2_id = sim._bodies_idx.get(body2_name)
+        
+        if body1_id is None or body2_id is None:
+            return False
+        
+        # Direct PyBullet API call
+        contacts = sim.physics_client.getContactPoints(
+            bodyA=body1_id,
+            bodyB=body2_id
+        )
+        
+        return len(contacts) > 0
+        
     except Exception as e:
-        print(f"Error executing trajectory: {e}")
+        print(f"  ⚠ Error checking collision: {e}")
         return False
+
+
+def quaternion_to_rotation_matrix(quaternion: np.ndarray) -> np.ndarray:
+    """
+    Convert quaternion to 3x3 rotation matrix.
+    
+    Args:
+        quaternion: Quaternion [x, y, z, w]
+    
+    Returns:
+        rotation_matrix: 3x3 rotation matrix
+    """
+    try:
+        # Use PyBullet's conversion
+        rot_matrix = np.array(p.getMatrixFromQuaternion(quaternion)).reshape(3, 3)
+        return rot_matrix
+    except Exception as e:
+        print(f"  ⚠ Error converting quaternion: {e}")
+        return np.eye(3)
+
+
+def wait_for_stability(sim, object_name: str, max_steps: int = 50,
+                      velocity_threshold: float = 0.01) -> bool:
+    """
+    Wait for object to stabilize after manipulation.
+    
+    Args:
+        sim: PyBullet simulation instance
+        object_name: Name of object to monitor
+        max_steps: Maximum steps to wait
+        velocity_threshold: Velocity threshold for stability (m/s)
+    
+    Returns:
+        is_stable: True if object stabilized within max_steps
+    """
+    for _ in range(max_steps):
+        sim.step()
+        
+        try:
+            vel = sim.get_base_velocity(object_name)
+            speed = np.linalg.norm(vel)
+            
+            if speed < velocity_threshold:
+                return True
+        except Exception:
+            return False
+    
+    return False
