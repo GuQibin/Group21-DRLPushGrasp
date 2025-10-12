@@ -128,14 +128,14 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.action_was_successful = True
         
         # 6. Define observation space
-        initial_obs, _ = self.reset()
+        obs_dim = 28 + self.MAX_OBJECTS * 21 + self.MAX_OBJECTS**2 + self.MAX_OBJECTS
         self.observation_space = spaces.Box(
             -np.inf, np.inf,
-            shape=initial_obs.shape,
+            shape=(obs_dim,),
             dtype=np.float32
         )
-        print(f"✓ Observation space: {self.observation_space.shape[0]}D")
-        print(f"  Formula: 28 + 22N + N² (N = number of objects)")
+        print(f"✓ Observation space: {obs_dim}D (padded to MAX_OBJECTS={self.MAX_OBJECTS})")
+        print(f"  Formula: 28 + {self.MAX_OBJECTS}×21 + {self.MAX_OBJECTS}² + {self.MAX_OBJECTS}")
         print("=" * 70 + "\n")
 
     def _draw_goal_square(self):
@@ -785,6 +785,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
