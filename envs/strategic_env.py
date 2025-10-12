@@ -95,10 +95,13 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.sim = PyBullet(render_mode=render_mode)
         self.robot = Panda(
             self.sim,
-            block_gripper=False,  # Enable gripper control
-            base_position=np.array([0.4, -0.3, 0.0])
-        )
-        print("✓ Robot: 7-DOF Panda at position [0.4, -0.3, 0.0]")
+            block_gripper=False,
+            base_position=np.array([0.4, -0.3, 0.0]),
+            control_type="ee"  
+    )
+        print(f"✓ Robot: 7-DOF Panda at position [0.4, -0.3, 0.0]")
+        print(f"  Control type: {getattr(self.robot, 'control_type', 'unknown')}")
+        print(f"  Block gripper: {getattr(self.robot, 'block_gripper', 'unknown')}")
         
         # 2. Action space: A = (α_skill, α_x, α_y, α_θ) ∈ [-1, 1]^4
         self.action_space = spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32)
@@ -771,5 +774,6 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
