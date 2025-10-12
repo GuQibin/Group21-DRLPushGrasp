@@ -90,6 +90,24 @@ class StrategicPushAndGraspEnv(gym.Env):
         print("=" * 70)
         print("Initializing Strategic Push-Grasp Environment (ME5418)")
         print("=" * 70)
+
+        print("\n[DIAGNOSTIC] Checking robot observation structure...")
+        test_obs = self.robot.get_obs()
+        print(f"  robot.get_obs() shape: {test_obs.shape}")
+        print(f"  robot.get_obs() values: {test_obs}")
+        
+        # Check what Panda actually provides
+        if hasattr(self.robot, 'control_type'):
+            print(f"  robot.control_type: {self.robot.control_type}")
+
+        panda_uid = self.sim._bodies_idx.get("panda")
+        if panda_uid:
+            print(f"  Testing direct velocity access:")
+            for i in range(7):
+                vel = self.sim.get_joint_velocity('panda', i)
+                print(f"    Joint {i} velocity: {vel:.6f}")
+        
+        print("[DIAGNOSTIC] Done\n")
         
         # 1. Create simulation and robot
         self.sim = PyBullet(render_mode=render_mode)
@@ -185,32 +203,55 @@ class StrategicPushAndGraspEnv(gym.Env):
 
     def _get_robot_state(self) -> Dict[str, np.ndarray]:
         robot_obs = self.robot.get_obs()
+        print(f"[DEBUG _get_robot_state] robot_obs shape: {robot_obs.shape}")
+        print(f"[DEBUG _get_robot_state] robot_obs: {robot_obs}")
 
+        # Get joint velocities - CHECK IF THEY EXIST
+        if robot_obs.shape[0] >= 14:
+            joint_velocities = robot_obs[7:14]
+        else:
+            # Fallback: compute velocities or use zeros
+            print("[WARNING] Joint velocities not in observation, using zeros")
+            joint_velocities = np.zeros(7, dtype=np.float32)
+        
+        print(f"[DEBUG] joint_velocities shape: {joint_velocities.shape}")
+        
+        # Check if velocities are actually zeros (might be missing from Panda)
+        if np.allclose(joint_velocities, 0) and robot_obs.shape[0] >= 14:
+            print("[WARNING] Joint velocities are all zero - might not be populated by Panda")
+        
         # For orientation, check if method exists
         ee_pos = self.robot.get_ee_position()
 
         try:
-            ee_quat = self.robot.get_ee_orientation()  
+            ee_quat = self.robot.get_ee_orientation()
         except AttributeError:
-            # Fallback: Use the link the Panda class uses for EE position
-            # Look inside panda.py to find which link get_ee_position() uses
-            panda_uid = self.sim._bodies_idx.get("panda")  
-            ee_link = getattr(self.robot, "ee_link", None) 
+            # Fallback to PyBullet
+            panda_uid = self.sim._bodies_idx.get("panda")
+            ee_link = getattr(self.robot, "ee_link", 11)
             if panda_uid is not None and ee_link is not None:
                 ee_quat = np.array(
                     p.getLinkState(panda_uid, ee_link, computeForwardKinematics=1)[1],
                     dtype=np.float32
                 )
             else:
-                # For orientation, check if method exists
                 ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
-
+        
+        # Get gripper width
+        if robot_obs.shape[0] >= 16:
+            gripper_width = np.array([np.mean(robot_obs[14:16])], dtype=np.float32)
+        else:
+            gripper_width = np.array([0.0], dtype=np.float32)
+        
+        print(f"[DEBUG] Final shapes: jp={joint_positions.shape}, jv={joint_velocities.shape}, "
+              f"ee_pos={ee_pos.shape}, ee_quat={ee_quat.shape}, gripper={gripper_width.shape}")
+        
         return {
-            'joint_positions':    robot_obs[:7],
-            'joint_velocities':   robot_obs[7:14],
-            'ee_position':        ee_pos,
-            'ee_orientation':     ee_quat,
-            'gripper_width':      np.array([np.mean(robot_obs[14:16])], dtype=np.float32),
+            'joint_positions': joint_positions.astype(np.float32),
+            'joint_velocities': joint_velocities.astype(np.float32),
+            'ee_position': ee_pos.astype(np.float32),
+            'ee_orientation': ee_quat.astype(np.float32),
+            'gripper_width': gripper_width.astype(np.float32),
         }
 
 
@@ -785,6 +826,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
