@@ -387,45 +387,56 @@ class StrategicPushAndGraspEnv(gym.Env):
         
         # 2. Object states (N×21D)
         objects = self._get_object_states()
-        N = len(self.objects)
+        N_actual = len(self.objects)
+        N_max = self.MAX_OBJECTS
         
-        if N > 0:
+        if N_actual > 0:
             object_vector = np.concatenate([
-                objects['positions'].flatten(),           # N×3
-                objects['orientations'].flatten(),        # N×4
-                objects['velocities'].flatten(),          # N×3
-                objects['angular_velocities'].flatten(),  # N×3
-                objects['shape_descriptors'].flatten()    # N×8
+                objects['positions'].flatten(),
+                objects['orientations'].flatten(),
+                objects['velocities'].flatten(),
+                objects['angular_velocities'].flatten(),
+                objects['shape_descriptors'].flatten()
             ])
+            # Pad to MAX_OBJECTS × 21D
+            padding_size = (N_max - N_actual) * 21
+            object_vector = np.concatenate([object_vector, np.zeros(padding_size, dtype=np.float32)])
         else:
-            object_vector = np.array([])
+        # All zeros if no objects
+            object_vector = np.zeros(N_max * 21, dtype=np.float32)
         
         # 3. Spatial relationships
         spatial = self._get_spatial_relationships()
-        distance_matrix_flat = spatial['distance_matrix'].flatten()
-        occlusion_mask = spatial['occlusion_mask']
+    
+        # Distance matrix: pad from N×N to MAX×MAX
+        distance_matrix_padded = np.zeros((N_max, N_max), dtype=np.float32)
+        if N_actual > 0:
+            distance_matrix_padded[:N_actual, :N_actual] = spatial['distance_matrix']
+        distance_matrix_flat = distance_matrix_padded.flatten()
+        occlusion_padded = np.zeros(N_max, dtype=np.float32)
+        if N_actual > 0:
+            occlusion_padded[:N_actual] = spatial['occlusion_mask'].astype(np.float32)
         
         # 4. Environment information (6D)
         env_info = np.array([
-            self.goal_pos[0],      # Goal X
-            self.goal_pos[1],      # Goal Y
-            self.goal_size,        # Goal size
-            self.table_bounds[0],  # Table X bound
-            self.table_bounds[1],  # Table Y bound
-            float(N)               # Number of objects
+            self.goal_pos[0],
+            self.goal_pos[1],
+            self.goal_size,
+            self.table_bounds[0],
+            self.table_bounds[1],
+            float(N_actual) 
         ], dtype=np.float32)
         
         # 5. Concatenate all components
-        obs_components = [robot_vector, env_info]
+        obs = np.concatenate([
+            robot_vector,      # 22D
+            env_info,          # 6D
+            object_vector,     # MAX × 21D
+            distance_matrix_flat,  # MAX²
+            occlusion_padded   # MAX
+        ])
         
-        if N > 0:
-            obs_components.extend([
-                object_vector,
-                distance_matrix_flat,
-                occlusion_mask.astype(np.float32)
-            ])
-        
-        return np.concatenate(obs_components).astype(np.float32) 
+        return obs.astype(np.float32)
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """
@@ -774,6 +785,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
