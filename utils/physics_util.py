@@ -361,24 +361,12 @@ def is_object_stable(sim, body_name: str,
         
         lin_speed = np.linalg.norm(lin_vel)
         ang_speed = np.linalg.norm(ang_vel)
-
-        velocity_stable = (lin_speed < velocity_threshold and 
-                          ang_speed < angular_velocity_threshold)
+        
+        return lin_speed < velocity_threshold and ang_speed < angular_velocity_threshold
       
-        # Additional check: position hasn't changed much
-        if position_history and len(position_history) >= 2:
-            current_pos = sim.get_base_position(body_name)
-            last_pos = position_history[-1]
-            pos_change = np.linalg.norm(np.array(current_pos) - np.array(last_pos))
-            position_stable = pos_change < position_threshold
-            return velocity_stable and position_stable
-        
-        return velocity_stable
-        
     except Exception as e:
         print(f"Warning: Could not check stability for {body_name}: {e}")
         return False
-
 
 def wait_for_objects_stable(sim, object_names: List[str], 
                            max_steps: int = 100,
@@ -565,27 +553,6 @@ def reset_object_pose(sim, body_name: str, position: np.ndarray,
     except Exception as e:
         print(f"Warning: Could not reset pose for {body_name}: {e}")
 
-
-def get_simulation_time(sim) -> float:
-    """
-    Get current simulation time in seconds.
-    
-    Args:
-        sim: PyBullet simulation instance
-    
-    Returns:
-        time: Simulation time in seconds (estimated from step count)
-    """
-    # PyBullet's default time step is 1/240 seconds
-    try:
-        # This is an approximation - actual implementation would need to track steps
-        # For now, return 0 as placeholder
-        return 0.0
-    except Exception as e:
-        print(f"Warning: Could not get simulation time: {e}")
-        return 0.0
-
-
 def set_gravity(sim, gravity: float = -9.81):
     """
     Set gravity in simulation.
@@ -598,52 +565,6 @@ def set_gravity(sim, gravity: float = -9.81):
         sim.physics_client.setGravity(0, 0, gravity)
     except Exception as e:
         print(f"Warning: Could not set gravity: {e}")
-
-
-def get_all_collisions(sim, body_name: str) -> List[Tuple[str, float]]:
-    """
-    Get all objects currently colliding with the specified body.
-    
-    Args:
-        sim: PyBullet simulation instance
-        body_name: Name of body to check
-    
-    Returns:
-        List of (colliding_body_name, contact_force) tuples
-    """
-    try:
-        body_id = sim._bodies_idx.get(body_name)
-        if body_id is None:
-            return []
-        
-        collisions = []
-        contact_points = sim.physics_client.getContactPoints(bodyA=body_id)
-        
-        # Group by body B and sum forces
-        body_forces = {}
-        for contact in contact_points:
-            body_b_id = contact[2]
-            force = abs(contact[9])
-            
-            # Find body name from ID
-            body_b_name = None
-            for name, bid in sim._bodies_idx.items():
-                if bid == body_b_id:
-                    body_b_name = name
-                    break
-            
-            if body_b_name and body_b_name != body_name:
-                if body_b_name in body_forces:
-                    body_forces[body_b_name] += force
-                else:
-                    body_forces[body_b_name] = force
-        
-        collisions = list(body_forces.items())
-        return collisions
-        
-    except Exception as e:
-        print(f"Warning: Error getting collisions for {body_name}: {e}")
-        return []
 
 
 def check_multiple_workspace_violations(sim, object_names: List[str],
@@ -693,3 +614,86 @@ def get_object_velocity_magnitude(sim, body_name: str) -> Tuple[float, float]:
     except Exception as e:
         print(f"Warning: Could not get velocity for {body_name}: {e}")
         return 0.0, 0.0
+
+def check_line_of_sight(sim, point_a: np.ndarray, point_b: np.ndarray,
+                       ignore_bodies: List[str] = None) -> Tuple[bool, Optional[str]]:
+    """
+    Check if there's a clear line of sight between two points.
+    
+    Args:
+        sim: PyBullet simulation instance
+        point_a: Start point [x, y, z]
+        point_b: End point [x, y, z]
+        ignore_bodies: List of body names to ignore in ray test
+    
+    Returns:
+        (is_clear, blocking_body): True if clear path, and name of blocking body if any
+    """
+    try:
+        # Convert to lists if numpy
+        if isinstance(point_a, np.ndarray):
+            point_a = point_a.tolist()
+        if isinstance(point_b, np.ndarray):
+            point_b = point_b.tolist()
+        
+        # Perform ray test
+        result = sim.physics_client.rayTest(point_a, point_b)
+        
+        if not result:
+            return True, None
+        
+        # result is a list: [objectUniqueId, linkIndex, hit_fraction, hit_position, hit_normal]
+        hit_body_id = result[0][0]
+        
+        # Check if hit body should be ignored
+        if ignore_bodies:
+            for name, body_id in sim._bodies_idx.items():
+                if body_id == hit_body_id and name in ignore_bodies:
+                    return True, None
+        
+        # Find name of blocking body
+        blocking_name = None
+        for name, body_id in sim._bodies_idx.items():
+            if body_id == hit_body_id:
+                blocking_name = name
+                break
+        
+        # hit_fraction < 1.0 means something was hit
+        if result[0][2] < 1.0:
+            return False, blocking_name
+        
+        return True, None
+        
+    except Exception as e:
+        print(f"Warning: Error in ray test: {e}")
+        return True, None  # Assume clear on error
+
+def enable_collision(sim, body_name1: str, body_name2: str, enable: bool = True):
+    """
+    Enable or disable collision detection between two bodies.
+    
+    Args:
+        sim: PyBullet simulation instance
+        body_name1: First body name
+        body_name2: Second body name
+        enable: True to enable collisions, False to disable
+    """
+    try:
+        body_id1 = sim._bodies_idx.get(body_name1)
+        body_id2 = sim._bodies_idx.get(body_name2)
+        
+        if body_id1 is None or body_id2 is None:
+            return
+        
+        # PyBullet uses enableCollision flag
+        # When enable=False, use setCollisionFilterPair
+        link_id = -1  # Base link
+        
+        sim.physics_client.setCollisionFilterPair(
+            body_id1, body_id2,
+            link_id, link_id,
+            enableCollision=int(enable)
+        )
+        
+    except Exception as e:
+        print(f"Warning: Could not set collision state: {e}")
