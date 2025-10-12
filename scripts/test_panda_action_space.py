@@ -5,6 +5,7 @@ import numpy as np
 import gymnasium as gym
 import sys
 from pathlib import Path
+import inspect
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -134,6 +135,14 @@ for _ in range(30):
 closed_gripper = get_gripper_state(robot)
 print(f"After close: {closed_gripper}")
 print(f"✓ PASS" if closed_gripper['is_closed'] else "✗ FAIL - Gripper didn't close")
+
+robot_file = inspect.getfile(type(robot))
+print(f"\nPanda class file: {robot_file}")
+
+# Print set_action method
+if hasattr(robot, 'set_action'):
+    print("\nset_action source:")
+    print(inspect.getsource(robot.set_action))
 
 print(f"\n{'='*60}")
 print("SUMMARY")
