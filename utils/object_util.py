@@ -278,11 +278,10 @@ def get_safe_spawn_position(sim, existing_objects: List[str],
     
     for attempt in range(max_attempts):
         # Random position in workspace
-        pos_xy = np.random.uniform(
-            low=workspace_bounds[0], 
-            high=workspace_bounds[1], 
-            size=2
-        )
+        pos_xy = np.array([
+            np.random.uniform(x_min, x_max),
+            np.random.uniform(y_min, y_max)
+        ], dtype=np.float32)
         
         # Check if in goal area
         in_goal = (
@@ -313,12 +312,11 @@ def get_safe_spawn_position(sim, existing_objects: List[str],
     # Fallback: return a position even if not ideal
     print(f"Warning: Could not find ideal spawn position after {max_attempts} attempts")
     fallback_pos = np.array([
-        np.random.uniform(workspace_bounds[0], workspace_bounds[1]),
-        np.random.uniform(workspace_bounds[0], workspace_bounds[1]),
+        np.random.uniform(x_min, x_max),
+        np.random.uniform(y_min, y_max),
         0.02
     ], dtype=np.float32)
     return fallback_pos
-
 
 def check_object_in_goal(object_pos: np.ndarray, goal_pos: np.ndarray, 
                         goal_size: float) -> bool:
@@ -328,7 +326,7 @@ def check_object_in_goal(object_pos: np.ndarray, goal_pos: np.ndarray,
     Args:
         object_pos: Object position [x, y, z] or [x, y]
         goal_pos: Goal center position [x, y]
-        goal_size: Side length of goal square
+        goal_size: Side length of goal square (meters)
     
     Returns:
         True if object is in goal area
