@@ -213,28 +213,28 @@ def test_with_real_environment():
             close_gripper
         )
 
-        gripper_state = get_gripper_state(env.robot)
+        gripper_state = get_gripper_state(env.unwrapped.robot)
         print(f"  ✓ Gripper state: {gripper_state}")
 
-        ee_pos = get_ee_position_safe(env.robot)
+        ee_pos = get_ee_position_safe(env.unwrapped.robot)
         print(f"  ✓ EE position: {ee_pos}")
 
         target_pos = ee_pos + np.array([0.05, 0.0, 0.0])
-        success = move_to_position(env.sim, env.robot, target_pos, steps=40)
+        success = move_to_position(env.unwrapped.sim, env.unwrapped.robot, target_pos, steps=40)
         print(f"  ✓ Movement {'succeeded' if success else 'completed with warnings'}")
 
         print("  Testing gripper open...")
-        open_gripper(env.sim, env.robot, steps=20)
+        open_gripper(env.unwrapped.sim, env.unwrapped.robot, steps=20)
         for _ in range(20):
-            env.sim.step()
+            env.unwrapped.sim.step()
 
         print("  Testing gripper close...")
-        close_gripper(env.sim, env.robot, steps=20)
+        close_gripper(env.unwrapped.sim, env.unwrapped.robot, steps=20)
         for _ in range(20):
-            env.sim.step()
+            env.unwrapped.sim.step()
 
         for _ in range(60):
-            env.sim.step()
+            env.unwrapped.sim.step()
 
         print("  ✓ Environment integration works")
 
@@ -271,14 +271,14 @@ def test_pick_and_place_dry_run():
         from utils.robot_util import execute_pick_and_place
         
         # Try to pick the first object
-        if len(env.objects) > 0:
-            target_obj = list(env.objects.keys())[0]
+        if len(env.unwrapped.objects) > 0:
+            target_obj = list(env.unwrapped.objects.keys())[0]
             print(f"  Attempting to pick {target_obj}...")
             
             success = execute_pick_and_place(
-                env.sim, env.robot, target_obj,
+                env.unwrapped.sim, env.unwrapped.robot, target_obj,
                 alpha_x=0.0, alpha_y=0.0,  # Center grasp
-                goal_pos=env.goal_pos
+                goal_pos=env.unwrapped.goal_pos
             )
             
             print(f"  {'yes successful' if success else 'not successful'} Pick-and-place {'succeeded' if success else 'completed'}")
@@ -313,12 +313,12 @@ def test_push_dry_run():
         from utils.robot_util import execute_push
         
         # Try to push the first object
-        if len(env.objects) > 0:
-            target_obj = list(env.objects.keys())[0]
+        if len(env.unwrapped.objects) > 0:
+            target_obj = list(env.unwrapped.objects.keys())[0]
             print(f"  Attempting to push {target_obj}...")
             
             success = execute_push(
-                env.sim, env.robot, target_obj,
+                env.unwrapped.sim, env.unwrapped.robot, target_obj,
                 alpha_x=0.0, alpha_y=0.0,  # Center contact
                 alpha_theta=0.0  # Push in positive X direction
             )
