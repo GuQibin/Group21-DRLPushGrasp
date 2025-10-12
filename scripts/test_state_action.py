@@ -295,38 +295,69 @@ def test_episode_flow():
     return True
 
 
+# def test_reset_consistency():
+#     """Test 8: Reset produces consistent structure."""
+#     print("\n" + "=" * 70)
+#     print("TEST 8: Reset Consistency")
+#     print("=" * 70)
+    
+#     env = gym.make("StrategicPushAndGrasp-v0", render_mode="human")
+    
+#     # Reset multiple times
+#     obs_shapes = []
+#     num_objects = []
+    
+#     for i in range(5):
+#         obs, info = env.reset()
+#         print(f"[Reset {i+1}] obs.shape = {obs.shape}")  # ← 打印 shape
+#         N = int(obs[-1])
+#         expected_dim = 28 + 22*N + N**2
+        
+#         obs_shapes.append(obs.shape[0])
+#         num_objects.append(N)
+        
+#         assert obs.shape[0] == expected_dim, \
+#             f"Reset {i+1}: dimension mismatch {obs.shape[0]} != {expected_dim}"
+    
+#     print(f"Reset results:")
+#     for i, (shape, N) in enumerate(zip(obs_shapes, num_objects), 1):
+#         expected = 28 + 22*N + N**2
+#         print(f"  Reset {i}: N={N}, obs_dim={shape}, expected={expected} ✓")
+    
+#     print("Reset produces consistent structure")
+    
+#     env.close()
+#     return True
 def test_reset_consistency():
-    """Test 8: Reset produces consistent structure."""
     print("\n" + "=" * 70)
     print("TEST 8: Reset Consistency")
     print("=" * 70)
-    
+
     env = gym.make("StrategicPushAndGrasp-v0", render_mode="human")
-    
-    # Reset multiple times
+    env_u = env.unwrapped
+    MAX_OBJECTS = env_u.MAX_OBJECTS
+
     obs_shapes = []
-    num_objects = []
-    
+    n_actual_list = []
+
     for i in range(5):
         obs, info = env.reset()
-        N = int(obs[-1])
-        expected_dim = 28 + 22*N + N**2
-        
+        N_actual = len(env_u.objects)          # 真正的物体数，仅用于打印/分析
+        expected_dim = 28 + 21*MAX_OBJECTS + MAX_OBJECTS**2 + MAX_OBJECTS
+        print(f"[Reset {i+1}] obs.shape={obs.shape}, "
+              f"N_actual={N_actual}, MAX_OBJECTS={MAX_OBJECTS}, "
+              f"expected_dim={expected_dim}")
+
         obs_shapes.append(obs.shape[0])
-        num_objects.append(N)
-        
+        n_actual_list.append(N_actual)
+
         assert obs.shape[0] == expected_dim, \
             f"Reset {i+1}: dimension mismatch {obs.shape[0]} != {expected_dim}"
-    
-    print(f"Reset results:")
-    for i, (shape, N) in enumerate(zip(obs_shapes, num_objects), 1):
-        expected = 28 + 22*N + N**2
-        print(f"  Reset {i}: N={N}, obs_dim={shape}, expected={expected} ✓")
-    
+
     print("Reset produces consistent structure")
-    
     env.close()
     return True
+
 
 
 def test_state_bounds():
@@ -347,7 +378,7 @@ def test_state_bounds():
     print("No extreme values detected")
     
     # Check specific components
-    robot_state = env._get_robot_state()
+    robot_state = env.unwrapped._get_robot_state()
     
     # Joint angles should be in reasonable range (typically -π to π)
     joint_range = np.max(np.abs(robot_state['joint_positions']))
