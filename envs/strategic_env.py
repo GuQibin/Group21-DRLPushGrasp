@@ -175,18 +175,23 @@ class StrategicPushAndGraspEnv(gym.Env):
             - gripper_width: 1D
         """
         robot_obs = self.robot.get_obs()
+        
+        # Get joint positions from observation (first 7 elements)
         joint_positions = np.array(robot_obs[:7], dtype=np.float32)
+        
+        # Get joint VELOCITIES directly from PyBullet (NOT in robot.get_obs())
         joint_velocities = np.zeros(7, dtype=np.float32)
         panda_uid = self.sim._bodies_idx.get("panda")
-    
+        
         if panda_uid is not None:
-        # Panda has 7 arm joints (indices 0-6)
+            # Panda has 7 arm joints (indices 0-6)
             for i in range(7):
                 try:
                     joint_velocities[i] = self.sim.get_joint_velocity("panda", i)
                 except:
                     joint_velocities[i] = 0.0
         
+        # Get gripper state (indices 7-8 in robot_obs for finger positions)
         if len(robot_obs) >= 9:
             gripper_state = np.array(robot_obs[7:9], dtype=np.float32)
         else:
@@ -194,26 +199,25 @@ class StrategicPushAndGraspEnv(gym.Env):
         
         # Get EE pose - use direct PyBullet access
         ee_link = getattr(self.robot, 'ee_link', 11)
-    
+        
         try:
             if panda_uid is not None:
                 link_state = self.sim.physics_client.getLinkState(
                     panda_uid, ee_link, computeForwardKinematics=1
                 )
-                ee_pos = np.array(link_state[0], dtype=np.float32)  # World position
-                ee_quat = np.array(link_state[1], dtype=np.float32)  # World orientation
+                ee_pos = np.array(link_state[0], dtype=np.float32)
+                ee_quat = np.array(link_state[1], dtype=np.float32)
             else:
                 ee_pos = np.zeros(3, dtype=np.float32)
                 ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
-                
         except Exception as e:
-            print(f"⚠ Warning: Could not get EE pose: {e}")
+            print(f"Warning: Could not get EE pose: {e}")
             ee_pos = np.zeros(3, dtype=np.float32)
             ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
     
         return {
             'joint_positions':    joint_positions,      # 7D
-            'joint_velocities':   joint_velocities,     # 7D ✓ Now correct!
+            'joint_velocities':   joint_velocities,     # 7D
             'ee_position':        ee_pos,               # 3D
             'ee_orientation':     ee_quat,              # 4D
             'gripper_width':      np.array([np.mean(gripper_state)], dtype=np.float32),  # 1D
@@ -716,6 +720,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
