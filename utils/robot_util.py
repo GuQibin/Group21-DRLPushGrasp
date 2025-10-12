@@ -494,17 +494,30 @@ def get_gripper_state(robot) -> dict:
         robot: Panda robot instance
     
     Returns:
-        Dictionary with gripper width, and status flags
+        Dictionary with gripper width and status flags
     """
     try:
         obs = robot.get_obs()
         
-        # Panda gripper has 2 finger joints (indices 14 and 15 in obs)
-        if len(obs) > 15:
-            finger_positions = obs[14:16]
+        # DEBUG: Print to find correct indices
+        print(f"[DEBUG] Full obs shape: {obs.shape}")
+        print(f"[DEBUG] Obs values: {obs}")
+        
+        # Panda gripper typically at indices 7-8 or 14-15
+        # Try different indices to find the right ones
+        if len(obs) >= 16:
+            # Standard panda-gym format
+            finger_positions = obs[7:9]  # Try 7-8 first
             gripper_width = float(np.sum(finger_positions))
+            
+            if gripper_width == 0.0:
+                # Try alternate indices
+                finger_positions = obs[14:16]
+                gripper_width = float(np.sum(finger_positions))
         else:
             gripper_width = 0.0
+        
+        print(f"[DEBUG] Gripper width: {gripper_width}")
         
         return {
             'width': gripper_width,
