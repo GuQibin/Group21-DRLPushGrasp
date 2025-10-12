@@ -554,80 +554,132 @@ class StrategicPushAndGraspEnv(gym.Env):
         
         return obs
 
+    
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """
         Reset environment to initial state for new episode.
         
+        This method:
+        1. Clears previous episode's objects
+        2. Creates a new random scene with 5-10 objects
+        3. Analyzes occlusions and updates visual colors
+        4. Selects initial target using nearest-to-goal heuristic
+        5. Resets all tracking variables for reward computation
+        
+        Args:
+            seed: Random seed for reproducibility
+            options: Additional reset options (unused)
+        
         Returns:
-            observation: Complete state vector
-            info: Empty dictionary
+            observation: Complete 348D state vector
+            info: Empty dictionary (required by Gymnasium API)
         """
         super().reset(seed=seed)
-        
+
+        # ====================================================================
+        # DISABLE RENDERING DURING SETUP - Significant speedup for training
+        # ====================================================================
         with self.sim.no_rendering():
-            # Setup static scene (table)
+            # ================================================================
+            # 1. CREATE STATIC SCENE (ONE-TIME SETUP)
+            # ================================================================
+            # Table only needs to be created once - it persists across episodes
             if not self.scene_setup:
+                # Create fixed table: 80cm × 80cm × 2cm
+                # Mass = 0 makes it static (immovable)
                 self.sim.create_box(
                     body_name="table",
-                    half_extents=np.array([0.4, 0.4, 0.01]),
-                    mass=0.0,
-                    position=np.array([0, 0, -0.01]),
-                    rgba_color=np.array([0.8, 0.8, 0.8, 1])
+                    half_extents=np.array([0.4, 0.4, 0.01]),  # Half-sizes in x, y, z
+                    mass=0.0,  # Static body
+                    position=np.array([0, 0, -0.01]),  # Centered at origin, slightly below
+                    rgba_color=np.array([0.8, 0.8, 0.8, 1])  # Light gray
                 )
                 self.scene_setup = True
             
-            # Remove old objects
+            # ================================================================
+            # 2. CLEAN UP PREVIOUS EPISODE
+            # ================================================================
+            # Remove all objects from previous episode from PyBullet simulation
             for body_name in self.objects:
                 body_id = self.sim._bodies_idx.get(body_name)
                 if body_id is not None:
                     self.sim.physics_client.removeBody(body_id)
             
+            # Clear object tracking dictionaries
             self.objects.clear()
             self.collected_objects.clear()
             
-            # Reset tracking variables
+            # ================================================================
+            # 3. RESET REWARD TRACKING VARIABLES
+            # ================================================================
+            # These track previous states for shaped rewards
             self.previous_joint_positions = None
             self.previous_object_distances.clear()
             self.previous_occlusion_states.clear()
             
-            # Draw goal area
+            # ================================================================
+            # 4. VISUALIZE GOAL ZONE
+            # ================================================================
+            # Draw green square showing where objects should be collected
             self._draw_goal_square()
             
-            # Reset robot
+            # ================================================================
+            # 5. RESET ROBOT TO HOME POSITION
+            # ================================================================
+            # Returns robot to default configuration
+            # Typically: arm upright, gripper open
             self.robot.reset()
             
-            # Spawn random objects (5-10)
-            num_objects = np.random.randint(5, self.MAX_OBJECTS + 1)
+            # ================================================================
+            # 6. SPAWN RANDOM OBJECTS (5-10 per episode)
+            # ================================================================
+            # Variable number creates curriculum: easier with fewer objects
+            num_objects = np.random.randint(5, self.MAX_OBJECTS + 1)  # [5, 10]
             object_types = ["cube", "sphere"]
             
             for i in range(num_objects):
                 body_name = f"object_{i}"
                 object_type = np.random.choice(object_types)
                 
+                # ============================================================
+                # SAFE SPAWN POSITION - Avoid collisions and goal zone
+                # ============================================================
+                # Finds position that:
+                # - Doesn't overlap with existing objects (>8cm separation)
+                # - Isn't inside the goal zone (makes task trivial)
+                # - Is within workspace bounds
                 spawn_pos = get_safe_spawn_position(
                     self.sim,
                     list(self.objects.keys()),
                     self.goal_pos,
                     self.goal_size,
-                    min_separation=self.MIN_OBJECT_SEPARATION,
+                    min_separation=self.MIN_OBJECT_SEPARATION,  # 8cm
                     workspace_bounds=self.WORKSPACE_BOUNDS
                 )
                 
+                # Default colors based on object type
+                # Cubes (green): Easy to grasp
+                # Spheres (yellow): Harder to grasp, prefer pushing
                 default_color = self.COLOR_GREEN if object_type == "cube" else self.COLOR_YELLOW
                 
-                # Create object and compute shape descriptor
+                # ============================================================
+                # CREATE OBJECT AND COMPUTE SHAPE DESCRIPTOR
+                # ============================================================
                 if object_type == "cube":
+                    # Create 4cm × 4cm × 4cm cube (2cm half-extents)
                     half_extents = np.array([0.02, 0.02, 0.02])
                     self.sim.create_box(
                         body_name=body_name,
                         half_extents=half_extents,
-                        mass=1.0,
+                        mass=1.0,  # 1kg - light enough to push/grasp
                         position=spawn_pos,
                         rgba_color=default_color
                     )
+                    # Compute 8D shape descriptor encoding geometry
                     shape_desc = compute_shape_descriptors("cube", half_extents=half_extents)
                 
                 elif object_type == "sphere":
+                    # Create 4cm diameter sphere (2cm radius)
                     radius = 0.02
                     self.sim.create_sphere(
                         body_name=body_name,
@@ -636,37 +688,60 @@ class StrategicPushAndGraspEnv(gym.Env):
                         position=spawn_pos,
                         rgba_color=default_color
                     )
+                    # Compute 8D shape descriptor encoding geometry
                     shape_desc = compute_shape_descriptors("sphere", radius=radius)
                 
-                # Store object metadata with shape descriptor
+                # ============================================================
+                # STORE OBJECT METADATA
+                # ============================================================
+                # This dictionary holds all object information needed for RL
                 self.objects[body_name] = {
-                    "type": object_type,
-                    "is_occluded": False,
-                    "shape_descriptor": shape_desc
+                    "type": object_type,           # "cube" or "sphere"
+                    "is_occluded": False,          # Will be updated by scene analysis
+                    "shape_descriptor": shape_desc # 8D vector (cached for observations)
                 }
                 
-                # Initialize distance tracking
+                # ============================================================
+                # INITIALIZE DISTANCE TRACKING FOR REWARD SHAPING
+                # ============================================================
+                # Store initial distance to goal for "approaching goal" reward
                 obj_pos = np.array(self.sim.get_base_position(body_name)[:2])
                 self.previous_object_distances[body_name] = np.linalg.norm(obj_pos - self.goal_pos)
             
-            # Analyze scene and update colors
+            # ================================================================
+            # 7. ANALYZE SCENE AND UPDATE VISUAL COLORS
+            # ================================================================
+            # Determine which objects are occluded (blocked by other objects)
+            # This updates the "is_occluded" field in self.objects
             analyze_scene_occlusions(self.sim, self.objects, self.OCCLUSION_THRESHOLD)
             
-            # Store initial occlusion states
+            # Store initial occlusion states for reward tracking
             for name in self.objects:
                 self.previous_occlusion_states[name] = self.objects[name]["is_occluded"]
             
+            # Update object colors based on occlusion status:
+            # - Green: Non-occluded cubes (easy targets)
+            # - Yellow: Non-occluded spheres (prefer push)
+            # - Red: Occluded objects (need clearing first)
             update_object_colors(
                 self.sim, self.objects,
                 self.COLOR_GREEN, self.COLOR_YELLOW, self.COLOR_RED
             )
             
-            # Select initial target using heuristic
+            # ================================================================
+            # 8. SELECT INITIAL TARGET (HEURISTIC)
+            # ================================================================
+            # Use simple heuristic: choose nearest uncollected object to goal
+            # This removes object selection from the RL problem
+            # Agent only learns: push vs. grasp, and how to execute action
             self.current_target = select_target_heuristic(
                 self.sim, self.objects, self.goal_pos, self.collected_objects
             )
         
-        # Initialize joint positions for trajectory penalty
+        # ====================================================================
+        # INITIALIZE JOINT TRACKING (AFTER RENDERING ENABLED)
+        # ====================================================================
+        # Store initial joint positions for trajectory length penalty
         self.previous_joint_positions = self.robot.get_obs()[:7]
         self.episode_step = 0
         
@@ -676,86 +751,164 @@ class StrategicPushAndGraspEnv(gym.Env):
         """
         Execute one environment step with complete action and reward.
         
+        This is the core RL loop function. It:
+        1. Parses the 4D action vector into skill + parameters
+        2. Executes the corresponding action primitive (push or grasp)
+        3. Updates scene analysis (occlusions, colors)
+        4. Computes the complete 8-component reward
+        5. Selects the next target object heuristically
+        6. Returns new observation and episode status
+        
         Args:
-            action: 4D array [α_skill, α_x, α_y, α_θ]
+            action: 4D array [α_skill, α_x, α_y, α_θ] ∈ [-1, 1]^4
+                - α_skill > 0: Pick-and-place
+                - α_skill ≤ 0: Push
+                - α_x, α_y: Contact point in object's local frame
+                - α_θ: Push direction (only for push action)
         
         Returns:
-            observation: Complete state vector
+            observation: Complete 348D state vector
             reward: Scalar reward (sum of 8 components)
-            terminated: True if episode complete
-            truncated: True if max steps reached
-            info: Dictionary with reward breakdown
+            terminated: True if ≥95% objects collected (success)
+            truncated: True if max_episode_steps reached
+            info: Dictionary with detailed statistics
         """
-        # Parse action: A = (α_skill, α_x, α_y, α_θ)
+        # ====================================================================
+        # 1. PARSE ACTION VECTOR
+        # ====================================================================
         a_skill, alpha_x, alpha_y, alpha_theta = action
         
-        # Determine action type based on α_skill
+        # Skill selection via sign of α_skill
+        # This is the "discrete" part of the hybrid action space
         action_type = "grasp" if a_skill > 0 else "push"
         
-        # Execute action primitive as specified in proposal
+        # ====================================================================
+        # 2. EXECUTE ACTION PRIMITIVE
+        # ====================================================================
+        # These functions handle all low-level motion planning:
+        # - Inverse kinematics
+        # - Collision-free trajectory generation
+        # - Gripper control
+        # - Physics simulation steps
+        
         if self.current_target is None:
-            # No target selected - action automatically fails
+            # Edge case: No objects remaining or target selection failed
             self.action_was_successful = False
             print(f"⚠ No target selected - action failed")
         
         elif action_type == "grasp":
-            # Execute pick-and-place primitive
+            # ============================================================
+            # PICK-AND-PLACE PRIMITIVE
+            # ============================================================
+            # Sequence:
+            # 1. Move to pre-grasp pose above object
+            # 2. Open gripper
+            # 3. Descend to grasp height
+            # 4. Close gripper (check grasp success)
+            # 5. Lift object
+            # 6. Move to goal zone
+            # 7. Open gripper (place)
+            # 8. Retract
             print(f"\nExecuting PICK-AND-PLACE on {self.current_target}")
             print(f"  Contact: α_x={alpha_x:.2f}, α_y={alpha_y:.2f}")
+            
             self.action_was_successful = execute_pick_and_place(
-                self.sim, self.robot, self.current_target,
-                alpha_x, alpha_y, self.goal_pos
+                self.sim, 
+                self.robot, 
+                self.current_target,
+                alpha_x,      # X offset in object frame
+                alpha_y,      # Y offset in object frame
+                self.goal_pos # Goal zone center
             )
         
         elif action_type == "push":
-            # Execute push primitive
+            # ============================================================
+            # PUSH PRIMITIVE
+            # ============================================================
+            # Sequence:
+            # 1. Move to pre-push pose
+            # 2. Align with push direction α_θ
+            # 3. Execute linear push (fixed distance, e.g., 5cm)
+            # 4. Retract
             print(f"\nExecuting PUSH on {self.current_target}")
             print(f"  Contact: α_x={alpha_x:.2f}, α_y={alpha_y:.2f}")
             print(f"  Direction: α_θ={alpha_theta:.2f} (angle={alpha_theta*np.pi:.2f} rad)")
+            
             self.action_was_successful = execute_push(
-                self.sim, self.robot, self.current_target,
-                alpha_x, alpha_y, alpha_theta
+                self.sim,
+                self.robot,
+                self.current_target,
+                alpha_x,       # X offset in object frame
+                alpha_y,       # Y offset in object frame
+                alpha_theta    # Push direction ∈ [-1, 1] → [-π, π]
             )
         
-        # Update scene analysis
+        # ====================================================================
+        # 3. UPDATE SCENE ANALYSIS
+        # ====================================================================
+        # Re-analyze occlusions after action execution
+        # Objects may have moved, changing occlusion relationships
         analyze_scene_occlusions(self.sim, self.objects, self.OCCLUSION_THRESHOLD)
+        
+        # Update visual feedback colors
         update_object_colors(
             self.sim, self.objects,
             self.COLOR_GREEN, self.COLOR_YELLOW, self.COLOR_RED
         )
         
-        # Get current joint positions for trajectory penalty
+        # ====================================================================
+        # 4. GET CURRENT JOINT STATE FOR TRAJECTORY PENALTY
+        # ====================================================================
         current_joints = self.robot.get_obs()[:7]
         
-        # Compute COMPLETE reward (8 components)
+        # ====================================================================
+        # 5. COMPUTE COMPLETE REWARD (8 COMPONENTS)
+        # ====================================================================
+        # This is where all reward shaping happens
+        # Returns both total reward and detailed breakdown
         reward, reward_info = self._compute_complete_reward(
             action_type=action_type,
             current_joints=current_joints
         )
         
-        # Update tracking variables
+        # ====================================================================
+        # 6. UPDATE TRACKING VARIABLES FOR NEXT STEP
+        # ====================================================================
         self.previous_joint_positions = current_joints
         self.episode_step += 1
         
-        # Update target selection (heuristic)
+        # ====================================================================
+        # 7. SELECT NEXT TARGET (HEURISTIC)
+        # ====================================================================
+        # Re-run heuristic to select next nearest uncollected object
+        # This happens AFTER reward computation to avoid confusion
         self.current_target = select_target_heuristic(
             self.sim, self.objects, self.goal_pos, self.collected_objects
         )
         
-        # Get new observation
+        # ====================================================================
+        # 8. GET NEW OBSERVATION
+        # ====================================================================
         obs = self._get_obs()
         
-        # Check termination conditions
+        # ====================================================================
+        # 9. CHECK TERMINATION CONDITIONS
+        # ====================================================================
+        # Terminated (success): ≥95% of objects collected
+        # Truncated (timeout): Reached max_episode_steps
         terminated = len(self.collected_objects) >= len(self.objects) * 0.95
         truncated = self.episode_step >= self.max_episode_steps
         
-        # Prepare info dictionary
+        # ====================================================================
+        # 10. PREPARE INFO DICTIONARY
+        # ====================================================================
+        # Used for logging, debugging, and evaluation
         info = {
             "is_success": terminated,
             "collected": len(self.collected_objects),
             "total": len(self.objects),
-            "reward_breakdown": reward_info,
-            "action_type": action_type,
+            "reward_breakdown": reward_info,  # Detailed reward components
+            "action_type": action_type,       # "push" or "grasp"
             "episode_step": self.episode_step
         }
         
@@ -764,143 +917,217 @@ class StrategicPushAndGraspEnv(gym.Env):
     def _compute_complete_reward(self, action_type: str,
                                  current_joints: np.ndarray) -> Tuple[float, dict]:
         """
-        Compute complete reward with all 8 components from proposal.
+        Compute complete reward with all 8 components from ME5418 proposal.
         
-        Components:
-        1. +5: Correctly placing one object
-        2. +25: More than 95% objects collected
-        3. +0.5: Successful push reduces distance/occlusion
-        4. -3: Failed grasp/push attempt
-        5. -10: Object leaves workspace
-        6. -5: Collision with fixed obstacles
-        7. -0.1: Each action (step penalty)
-        8. -0.01/rad: Trajectory length penalty
+        This implements the exact reward structure specified in the project:
+        
+        ┌────────────────────────────────────────────────────────────────┐
+        │ Component                          │ Value  │ Purpose          │
+        ├────────────────────────────────────┼────────┼──────────────────┤
+        │ 1. Object placement                │ +5     │ Primary goal     │
+        │ 2. Task completion (≥95%)          │ +25    │ Episode bonus    │
+        │ 3. Successful push (progress)      │ +0.5   │ Push shaping     │
+        │ 4. Failed action                   │ -3     │ Discourage fails │
+        │ 5. Workspace violation             │ -10    │ Safety           │
+        │ 6. Collision with obstacles        │ -5     │ Safety           │
+        │ 7. Step penalty                    │ -0.1   │ Encourage speed  │
+        │ 8. Trajectory length               │ -0.01/rad│ Smooth motion  │
+        └────────────────────────────────────────────────────────────────┘
+        
+        Args:
+            action_type: "push" or "grasp" (determines which rewards apply)
+            current_joints: Current joint positions (7D) for trajectory penalty
         
         Returns:
-            total_reward: Sum of all components
-            reward_info: Dictionary with breakdown
+            total_reward: Sum of all 8 components
+            reward_info: Dictionary with per-component breakdown for logging
         """
         reward_info = {}
         
-        # ========== Component 1: Object placement (+5) ==========
+        # ====================================================================
+        # COMPONENT 1: OBJECT PLACEMENT (+5)
+        # ====================================================================
+        # Primary sparse reward: only given when object enters goal zone
         placement_reward = 0.0
+        
         if self.current_target and self.current_target in self.objects:
             obj_pos = self.sim.get_base_position(self.current_target)
+            
+            # Check if object center is within goal square
             if check_object_in_goal(obj_pos, self.goal_pos, self.goal_size):
+                # Only reward once per object (check collected set)
                 if self.current_target not in self.collected_objects:
                     placement_reward = 5.0
                     self.collected_objects.add(self.current_target)
                     print(f"✓ Object {self.current_target} placed in goal! (+5)")
+        
         reward_info['placement'] = placement_reward
         
-        # ========== Component 2: Task completion (+25) ==========
+        # ====================================================================
+        # COMPONENT 2: TASK COMPLETION (+25)
+        # ====================================================================
+        # Bonus for completing episode objective (≥95% objects collected)
+        # Given only once per episode when threshold is crossed
         completion_reward = 0.0
         completion_threshold = len(self.objects) * 0.95
+        
         if len(self.collected_objects) >= completion_threshold:
             completion_reward = 25.0
             print(f"✓ Task completed! {len(self.collected_objects)}/{len(self.objects)} objects (+25)")
+        
         reward_info['completion'] = completion_reward
         
-        # ========== Component 3: Successful push (+0.5) ==========
+        # ====================================================================
+        # COMPONENT 3: SUCCESSFUL PUSH (+0.5)
+        # ====================================================================
+        # Reward shaping for push actions that make progress
+        # Encourages learning useful push strategies
         push_success_reward = 0.0
+        
         if action_type == "push" and self.current_target and self.action_was_successful:
-            # Check if push moved object closer to goal
+            # ================================================================
+            # CHECK 1: Did push move object closer to goal?
+            # ================================================================
             obj_pos = np.array(self.sim.get_base_position(self.current_target)[:2])
             current_dist = np.linalg.norm(obj_pos - self.goal_pos)
             previous_dist = self.previous_object_distances.get(self.current_target, current_dist)
             
-            distance_reduced = previous_dist - current_dist > 0.01  # Moved >1cm
+            # Require >1cm improvement to avoid rewarding noise
+            distance_reduced = previous_dist - current_dist > 0.01
             
-            # Check if push cleared occlusion
+            # ================================================================
+            # CHECK 2: Did push clear an occlusion?
+            # ================================================================
             was_occluded = self.previous_occlusion_states.get(self.current_target, False)
             now_occluded = self.objects[self.current_target]["is_occluded"]
             occlusion_cleared = was_occluded and not now_occluded
             
+            # Reward if EITHER condition is met
             if distance_reduced or occlusion_cleared:
                 push_success_reward = 0.5
+                
                 if distance_reduced:
                     print(f"✓ Push moved object closer ({previous_dist:.3f}→{current_dist:.3f}m) (+0.5)")
                 if occlusion_cleared:
                     print(f"✓ Push cleared occlusion (+0.5)")
             
-            # Update distance tracking
+            # Update distance tracking for next step
             self.previous_object_distances[self.current_target] = current_dist
         
-        # Update occlusion tracking for all objects
+        # Update occlusion tracking for ALL objects (not just current target)
         for name in self.objects:
             self.previous_occlusion_states[name] = self.objects[name]["is_occluded"]
         
         reward_info['push_success'] = push_success_reward
         
-        # ========== Component 4: Failed action (-3) ==========
+        # ====================================================================
+        # COMPONENT 4: FAILED ACTION (-3)
+        # ====================================================================
+        # Penalty for failed execution (e.g., grasp misses, push ineffective)
+        # Encourages learning robust action parameters
         failure_penalty = 0.0
+        
         if not self.action_was_successful:
             failure_penalty = -3.0
             print(f"✗ Action failed! ({action_type}) (-3)")
+        
         reward_info['failure'] = failure_penalty
         
-        # ========== Component 5: Workspace violation (-10) ==========
+        # ====================================================================
+        # COMPONENT 5: WORKSPACE VIOLATION (-10)
+        # ====================================================================
+        # Harsh penalty for objects falling off table or leaving bounds
+        # Encourages careful manipulation
         workspace_penalty = 0.0
+        
         for obj_name in list(self.objects.keys()):
             if check_workspace_violation(
-                self.sim, obj_name,
+                self.sim, 
+                obj_name,
                 self.WORKSPACE_BOUNDS,
-                z_min=-0.05
+                z_min=-0.05  # 5cm below table = fallen
             ):
                 workspace_penalty = -10.0
                 print(f"✗ Object {obj_name} left workspace! (-10)")
-                # Remove from tracking
+                
+                # Remove fallen object from tracking (can't be collected anymore)
                 if obj_name in self.objects:
                     del self.objects[obj_name]
-                break
+                break  # Only penalize once per step
+        
         reward_info['workspace_violation'] = workspace_penalty
         
-        # ========== Component 6: Collision penalty (-5) ==========
+        # ====================================================================
+        # COMPONENT 6: COLLISION PENALTY (-5)
+        # ====================================================================
+        # Penalty for robot colliding with table or other objects
+        # Encourages collision-free motion planning
         collision_penalty = 0.0
         
-        # Check collision with table
+        # Check 1: Robot-table collision
         if check_collision_with_table(self.sim, 'panda', 'table'):
             collision_penalty = -5.0
             print(f"✗ Robot collided with table! (-5)")
         
-        # Check collision with other objects
-        if collision_penalty == 0.0:
+        # Check 2: Robot colliding with non-target objects
+        if collision_penalty == 0.0:  # Only check if no table collision
             for obj_name in self.objects:
+                # Allow contact with current target (necessary for manipulation)
                 if obj_name != self.current_target:
                     if check_object_collision(self.sim, 'panda', obj_name):
                         collision_penalty = -5.0
                         print(f"✗ Robot collided with {obj_name}! (-5)")
-                        break
+                        break  # Only penalize once per step
         
         reward_info['collision'] = collision_penalty
         
-        # ========== Component 7: Step penalty (-0.1) ==========
+        # ====================================================================
+        # COMPONENT 7: STEP PENALTY (-0.1)
+        # ====================================================================
+        # Constant penalty per action to encourage efficiency
+        # Prevents agent from taking unnecessary actions
         step_penalty = -0.1
         reward_info['step'] = step_penalty
         
-        # ========== Component 8: Trajectory penalty (-0.01/rad) ==========
+        # ====================================================================
+        # COMPONENT 8: TRAJECTORY LENGTH PENALTY (-0.01/rad)
+        # ====================================================================
+        # Encourages smooth, minimal joint motion
+        # Penalizes jerky or wasteful movements
         trajectory_penalty = 0.0
+        
         if self.previous_joint_positions is not None:
             # Sum absolute joint displacements across all 7 DOF
             joint_displacement = np.abs(current_joints - self.previous_joint_positions)
-            total_movement = np.sum(joint_displacement)  # Radians
+            total_movement = np.sum(joint_displacement)  # Total radians moved
             
             # Penalty: -0.01 per radian moved
             trajectory_penalty = -0.01 * total_movement
             
+            # Log significant movements (>0.1 rad = ~5.7 degrees)
             if total_movement > 0.1:
                 print(f"Trajectory: {total_movement:.3f} rad → {trajectory_penalty:.4f}")
+        
         reward_info['trajectory'] = trajectory_penalty
         
-        # ========== TOTAL REWARD ==========
+        # ====================================================================
+        # TOTAL REWARD
+        # ====================================================================
+        # Sum all 8 components
         total_reward = sum(reward_info.values())
         
         return total_reward, reward_info
 
     def close(self):
-        """Clean up environment resources."""
+        """
+        Clean up environment resources.
+        
+        Called at the end of training or evaluation to properly shut down
+        PyBullet simulation and free resources.
+        """
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
