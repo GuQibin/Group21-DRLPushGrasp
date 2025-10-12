@@ -1868,7 +1868,7 @@ def diagnose_robot_control(robot, sim, steps: int = 10):
     Returns:
         None (prints diagnostic report to console)
     """
-     print("\n" + "="*60)
+    print("\n" + "="*60)
     print("ROBOT CONTROL DIAGNOSTICS")
     print("="*60)
 

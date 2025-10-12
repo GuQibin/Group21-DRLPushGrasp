@@ -781,7 +781,14 @@ class StrategicPushAndGraspEnv(gym.Env):
         # Skill selection via sign of α_skill
         # This is the "discrete" part of the hybrid action space
         action_type = "grasp" if a_skill > 0 else "push"
-        
+
+        # --------- NEW: Force push based on occlusion/type ----------
+        force_push = self._should_force_push(self.current_target)
+        if force_push:
+            action_type = "push"
+            a_skill = -abs(a_skill)  # Optional: also flip the sign for logging or downstream use
+        # ------------------------------------------------------------
+                
         # ====================================================================
         # 2. EXECUTE ACTION PRIMITIVE
         # ====================================================================
@@ -1128,13 +1135,16 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.sim.close()
         print("\nEnvironment closed.")
 
+    def _should_force_push(self, target_name: Optional[str]) -> bool:
+        """
+        Rule: if the target is occluded OR the target is a sphere → force push.
+        Returns True if push is mandatory.
+        """
+        if not target_name or target_name not in self.objects:
+            return True  # No target or inconsistent state → push conservatively
 
-
-
-
-
-
-
-
-
-
+        meta = self.objects[target_name]
+        is_occluded = bool(meta.get("is_occluded", False))
+        typ = meta.get("type", "unknown")
+        non_graspable_types = {"sphere"}  # Types that should not (or are hard to) be grasped
+        return is_occluded or (typ in non_graspable_types)
