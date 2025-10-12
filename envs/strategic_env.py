@@ -234,7 +234,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         except Exception as e:
             print(f"Warning: Could not get EE pose: {e}")
             ee_pos = np.zeros(3, dtype=np.float32)
-            ee_quat = np.array([0, 0, 0, 1], dtype=np.float32
+            ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
     
         return {
             'joint_positions':    joint_positions,      # 7D
@@ -741,6 +741,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
