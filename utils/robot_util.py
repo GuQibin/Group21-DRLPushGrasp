@@ -649,22 +649,22 @@ def diagnose_robot_control(robot, sim, steps: int = 10):
     print("="*60)
     
     if delta_zero < 0.001:
-        print(" Zero action works correctly")
+        print("✓ Zero action works correctly")
     else:
-        print(" Zero action caused movement - check action space!")
+        print("✗ Zero action caused movement - check action space!")
     
     if 0.05 < np.linalg.norm(delta_x) < 0.15:
-        print(" Position delta control works")
+        print("✓ Position delta control works")
     else:
-        print(" Position control not working as expected")
-        print("   Check if action space is [dx, dy, dz, gripper]")
-        print("   Or if it's [target_x, target_y, target_z, gripper]")
+        print("✗ Position control not working as expected")
+        print("  → Check if action space is [dx, dy, dz, gripper]")
+        print("  → Or if it's [target_x, target_y, target_z, gripper]")
     
     if gripper_state_open['is_open'] and gripper_state_closed['is_closed']:
-        print("Gripper control works")
+        print("✓ Gripper control works")
     else:
-        print(" Gripper control issue")
-        print(f"   Open state: {gripper_state_open}")
-        print(f"   Closed state: {gripper_state_closed}")
+        print("✗ Gripper control issue")
+        print(f"  → Open state: {gripper_state_open}")
+        print(f"  → Closed state: {gripper_state_closed}")
     
     print("="*60 + "\n")
