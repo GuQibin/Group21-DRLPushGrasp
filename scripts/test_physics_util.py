@@ -17,17 +17,24 @@ def test_imports():
             check_workspace_violation,
             check_collision_with_table,
             check_object_collision,
+            check_robot_link_collision,
+            check_self_collision,
             get_contact_force,
+            get_contact_details,
+            get_all_collisions,
+            draw_workspace_boundary,
             is_object_stable,
+            wait_for_objects_stable,
             get_object_bounding_box,
             compute_object_volume,
             set_object_color,
             apply_force_to_object,
             reset_object_pose,
             set_gravity,
-            get_all_collisions,
             check_multiple_workspace_violations,
-            get_object_velocity_magnitude
+            get_object_velocity_magnitude,
+            check_line_of_sight,
+            enable_collision
         )
         print("  ✓ All imports successful")
         return True
@@ -51,15 +58,14 @@ def test_workspace_violation_logic():
                 'obj_outside_y': [0.0, 0.5, 0.05],
                 'obj_fell': [0.0, 0.0, -0.1]
             }
-
-        # If the object name doesn't exist, raise an error so the test hits the
-        # "missing object" branch (treated as a violation).
-        def get_base_position(self, name):
-            if name not in self.positions:
-                raise KeyError(name)  # critical change: raise when missing
-            return self.positions[name]
-
         
+        def get_base_position(self, name):
+            # FIXED: Raise exception for missing objects
+            # This matches what the actual function expects
+            if name not in self.positions:
+                raise KeyError(f"Object {name} not found")
+            return self.positions[name]
+    
     sim = MockSim()
     bounds = (-0.3, 0.3, -0.3, 0.3)  # x_min, x_max, y_min, y_max
     
@@ -89,10 +95,10 @@ def test_stability_check():
             }
         
         def get_base_velocity(self, name):
-            return self.velocities.get(name, ([0, 0, 0], [0, 0, 0]))[0]
+            return np.array(self.velocities.get(name, ([0, 0, 0], [0, 0, 0]))[0])
         
         def get_base_angular_velocity(self, name):
-            return self.velocities.get(name, ([0, 0, 0], [0, 0, 0]))[1]
+            return np.array(self.velocities.get(name, ([0, 0, 0], [0, 0, 0]))[1])
     
     sim = MockSim()
     
@@ -112,18 +118,26 @@ def test_volume_computation():
     # Mock sim with bounding box
     class MockSim:
         def __init__(self):
-            self._bodies_idx = {'cube': 1}
+            self._bodies_idx = {'cube': 1, 'missing': None}
             self.physics_client = self
         
         def getAABB(self, body_id):
-            # Returns min and max corners for a 0.04m cube
-            return ([0.0, 0.0, 0.0], [0.04, 0.04, 0.04])
+            if body_id == 1:
+                # Returns min and max corners for a 0.04m cube
+                return ([0.0, 0.0, 0.0], [0.04, 0.04, 0.04])
+            else:
+                raise Exception("Invalid body ID")
     
     sim = MockSim()
-    volume = compute_object_volume(sim, 'cube')
     
+    # Test valid object
+    volume = compute_object_volume(sim, 'cube')
     expected_volume = 0.04 * 0.04 * 0.04
     assert abs(volume - expected_volume) < 1e-6, f"Expected {expected_volume}, got {volume}"
+    
+    # Test missing object
+    volume_missing = compute_object_volume(sim, 'nonexistent')
+    assert volume_missing == 0.0, "Missing object should return 0 volume"
     
     print("  ✓ Volume computation correct")
 
@@ -184,6 +198,35 @@ def test_multiple_violations():
     print("  ✓ Multiple violations check correct")
 
 
+def test_collision_mock():
+    """Test collision detection with mock"""
+    print("\nTesting collision detection...")
+    
+    from utils.physics_util import check_object_collision
+    
+    # Mock sim
+    class MockPhysicsClient:
+        def getContactPoints(self, bodyA, bodyB):
+            # Return empty list (no collision) for most cases
+            if bodyA == 1 and bodyB == 2:
+                return [('contact_point',)]  # Non-empty = collision
+            return []
+    
+    class MockSim:
+        def __init__(self):
+            self._bodies_idx = {'obj1': 1, 'obj2': 2, 'obj3': 3}
+            self.physics_client = MockPhysicsClient()
+    
+    sim = MockSim()
+    
+    # Test collision
+    assert check_object_collision(sim, 'obj1', 'obj2') == True, "Should detect collision"
+    assert check_object_collision(sim, 'obj1', 'obj3') == False, "Should not detect collision"
+    assert check_object_collision(sim, 'obj2', 'obj3') == False, "Should not detect collision"
+    
+    print("  ✓ Collision detection correct")
+
+
 def test_with_real_environment():
     """Test with actual environment (optional)"""
     print("\nTesting with real environment...")
@@ -229,7 +272,7 @@ def test_with_real_environment():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Testing utils/physics_utils.py")
+    print("Testing utils/physics_util.py")
     print("=" * 60 + "\n")
     
     all_passed = True
@@ -237,29 +280,32 @@ if __name__ == "__main__":
     # Test 1: Imports
     if not test_imports():
         all_passed = False
-        print("\n Cannot proceed - import errors")
+        print("\nCannot proceed - import errors")
         sys.exit(1)
     
-    # Test 2-6: Unit tests
+    # Test 2-7: Unit tests
     tests = [
         test_workspace_violation_logic,
         test_stability_check,
         test_volume_computation,
         test_velocity_magnitude,
-        test_multiple_violations
+        test_multiple_violations,
+        test_collision_mock
     ]
     
     for test_func in tests:
         try:
             test_func()
         except AssertionError as e:
-            print(f"Test failed: {e}")
+            print(f"  ❌ Test failed: {e}")
             all_passed = False
         except Exception as e:
-            print(f"Unexpected error: {e}")
+            print(f"  ❌ Unexpected error: {e}")
+            import traceback
+            traceback.print_exc()
             all_passed = False
     
-    # Test 7: Real environment (optional)
+    # Test 8: Real environment (optional)
     try:
         test_with_real_environment()
     except Exception as e:
@@ -267,7 +313,7 @@ if __name__ == "__main__":
     
     print("\n" + "=" * 60)
     if all_passed:
-        print("ALL CORE TESTS PASSED")
+        print("✓ ALL CORE TESTS PASSED")
     else:
-        print("SOME TESTS FAILED")
+        print("✗ SOME TESTS FAILED")
     print("=" * 60)
