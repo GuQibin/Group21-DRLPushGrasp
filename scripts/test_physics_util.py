@@ -6,10 +6,11 @@ import numpy as np
 import sys
 from pathlib import Path
 
+# Add parent directory to Python path to enable importing from utils package
 sys.path.append(str(Path(__file__).parent.parent))
 
 def test_imports():
-    """Test all imports work"""
+    """Test all imports work correctly - ensures all functions are properly defined"""
     print("Testing imports...")
     
     try:
@@ -44,32 +45,32 @@ def test_imports():
 
 
 def test_workspace_violation_logic():
-    """Test workspace violation logic with mock data"""
+    """Test workspace boundary violation detection with various object positions"""
     print("\nTesting workspace violation logic...")
     
     from utils.physics_util import check_workspace_violation
     
-    # Mock sim
+    # Mock simulation environment for testing without actual physics
     class MockSim:
         def __init__(self):
+            # Define test object positions: inside bounds, outside bounds, and fallen
             self.positions = {
-                'obj_inside': [0.0, 0.0, 0.05],
-                'obj_outside_x': [0.5, 0.0, 0.05],
-                'obj_outside_y': [0.0, 0.5, 0.05],
-                'obj_fell': [0.0, 0.0, -0.1]
+                'obj_inside': [0.0, 0.0, 0.05],      # Inside workspace (normal)
+                'obj_outside_x': [0.5, 0.0, 0.05],   # Outside X boundary
+                'obj_outside_y': [0.0, 0.5, 0.05],   # Outside Y boundary  
+                'obj_fell': [0.0, 0.0, -0.1]         # Below table (fallen)
             }
         
         def get_base_position(self, name):
-            # FIXED: Raise exception for missing objects
-            # This matches what the actual function expects
+            # FIXED: Raise exception for missing objects to match real behavior
             if name not in self.positions:
                 raise KeyError(f"Object {name} not found")
             return self.positions[name]
     
     sim = MockSim()
-    bounds = (-0.3, 0.3, -0.3, 0.3)  # x_min, x_max, y_min, y_max
+    bounds = (-0.3, 0.3, -0.3, 0.3)  # Workspace boundaries: x_min, x_max, y_min, y_max
     
-    # Test cases
+    # Test various scenarios
     assert check_workspace_violation(sim, 'obj_inside', bounds) == False, "Inside object shouldn't violate"
     assert check_workspace_violation(sim, 'obj_outside_x', bounds) == True, "Outside X should violate"
     assert check_workspace_violation(sim, 'obj_outside_y', bounds) == True, "Outside Y should violate"
@@ -80,18 +81,19 @@ def test_workspace_violation_logic():
 
 
 def test_stability_check():
-    """Test object stability checking"""
+    """Test object stability detection based on velocity thresholds"""
     print("\nTesting stability check...")
     
     from utils.physics_util import is_object_stable
     
-    # Mock sim
+    # Mock simulation with different motion states
     class MockSim:
         def __init__(self):
+            # Format: [linear_velocity, angular_velocity] for each object
             self.velocities = {
-                'stable': ([0.001, 0.001, 0.0], [0.01, 0.01, 0.0]),
-                'moving': ([0.5, 0.0, 0.0], [0.0, 0.0, 0.0]),
-                'rotating': ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
+                'stable': ([0.001, 0.001, 0.0], [0.01, 0.01, 0.0]),      # Very slow movement
+                'moving': ([0.5, 0.0, 0.0], [0.0, 0.0, 0.0]),            # Fast linear motion
+                'rotating': ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0])           # Fast rotation
             }
         
         def get_base_velocity(self, name):
@@ -102,40 +104,43 @@ def test_stability_check():
     
     sim = MockSim()
     
-    assert is_object_stable(sim, 'stable') == True, "Stable object should be stable"
-    assert is_object_stable(sim, 'moving') == False, "Moving object should not be stable"
-    assert is_object_stable(sim, 'rotating') == False, "Rotating object should not be stable"
+    # Test stability detection
+    assert is_object_stable(sim, 'stable') == True, "Slow-moving object should be stable"
+    assert is_object_stable(sim, 'moving') == False, "Fast-moving object should not be stable"
+    assert is_object_stable(sim, 'rotating') == False, "Fast-rotating object should not be stable"
     
     print("  ✓ Stability check correct")
 
 
 def test_volume_computation():
-    """Test volume computation"""
+    """Test 3D volume calculation from object bounding boxes"""
     print("\nTesting volume computation...")
     
     from utils.physics_util import compute_object_volume
     
-    # Mock sim with bounding box
+    # Mock simulation with bounding box information
     class MockSim:
         def __init__(self):
+            # Map object names to physics body IDs
             self._bodies_idx = {'cube': 1, 'missing': None}
-            self.physics_client = self
+            self.physics_client = self  # Self-reference for API compatibility
         
         def getAABB(self, body_id):
+            # Return Axis-Aligned Bounding Box (min and max corners)
             if body_id == 1:
-                # Returns min and max corners for a 0.04m cube
+                # Represents a 0.04m × 0.04m × 0.04m cube
                 return ([0.0, 0.0, 0.0], [0.04, 0.04, 0.04])
             else:
                 raise Exception("Invalid body ID")
     
     sim = MockSim()
     
-    # Test valid object
+    # Test valid object volume calculation
     volume = compute_object_volume(sim, 'cube')
-    expected_volume = 0.04 * 0.04 * 0.04
+    expected_volume = 0.04 * 0.04 * 0.04  # Volume of cube: width × height × depth
     assert abs(volume - expected_volume) < 1e-6, f"Expected {expected_volume}, got {volume}"
     
-    # Test missing object
+    # Test missing object edge case
     volume_missing = compute_object_volume(sim, 'nonexistent')
     assert volume_missing == 0.0, "Missing object should return 0 volume"
     
@@ -143,22 +148,25 @@ def test_volume_computation():
 
 
 def test_velocity_magnitude():
-    """Test velocity magnitude calculation"""
+    """Test calculation of linear and angular speed magnitudes"""
     print("\nTesting velocity magnitude...")
     
     from utils.physics_util import get_object_velocity_magnitude
     
-    # Mock sim
+    # Mock simulation with predefined velocities
     class MockSim:
         def get_base_velocity(self, name):
-            return np.array([0.3, 0.4, 0.0])  # magnitude = 0.5
+            # Linear velocity vector: magnitude = sqrt(0.3² + 0.4²) = 0.5
+            return np.array([0.3, 0.4, 0.0])
         
         def get_base_angular_velocity(self, name):
-            return np.array([1.0, 0.0, 0.0])  # magnitude = 1.0
+            # Angular velocity vector: magnitude = 1.0
+            return np.array([1.0, 0.0, 0.0])
     
     sim = MockSim()
     lin_speed, ang_speed = get_object_velocity_magnitude(sim, 'test_obj')
     
+    # Verify magnitude calculations
     assert abs(lin_speed - 0.5) < 1e-6, f"Expected linear speed 0.5, got {lin_speed}"
     assert abs(ang_speed - 1.0) < 1e-6, f"Expected angular speed 1.0, got {ang_speed}"
     
@@ -166,31 +174,33 @@ def test_velocity_magnitude():
 
 
 def test_multiple_violations():
-    """Test checking multiple objects"""
+    """Test batch checking of multiple objects for workspace violations"""
     print("\nTesting multiple workspace violations...")
     
     from utils.physics_util import check_multiple_workspace_violations
     
-    # Mock sim
+    # Mock simulation with multiple object positions
     class MockSim:
         def get_base_position(self, name):
             positions = {
-                'obj1': [0.0, 0.0, 0.05],    # Inside
-                'obj2': [0.5, 0.0, 0.05],    # Outside
-                'obj3': [0.0, 0.5, 0.05],    # Outside
-                'obj4': [0.1, 0.1, 0.05]     # Inside
+                'obj1': [0.0, 0.0, 0.05],    # Inside bounds
+                'obj2': [0.5, 0.0, 0.05],    # Outside X boundary
+                'obj3': [0.0, 0.5, 0.05],    # Outside Y boundary
+                'obj4': [0.1, 0.1, 0.05]     # Inside bounds
             }
             return positions.get(name, [0, 0, 0])
     
     sim = MockSim()
     bounds = (-0.3, 0.3, -0.3, 0.3)
     
+    # Check all objects at once
     violated = check_multiple_workspace_violations(
         sim, 
         ['obj1', 'obj2', 'obj3', 'obj4'],
         bounds
     )
     
+    # Should detect 2 violations (obj2 and obj3)
     assert len(violated) == 2, f"Expected 2 violations, got {len(violated)}"
     assert 'obj2' in violated, "obj2 should be in violations"
     assert 'obj3' in violated, "obj3 should be in violations"
@@ -199,27 +209,28 @@ def test_multiple_violations():
 
 
 def test_collision_mock():
-    """Test collision detection with mock"""
+    """Test collision detection between objects using mock physics"""
     print("\nTesting collision detection...")
     
     from utils.physics_util import check_object_collision
     
-    # Mock sim
+    # Mock physics client that simulates contact points
     class MockPhysicsClient:
         def getContactPoints(self, bodyA, bodyB):
-            # Return empty list (no collision) for most cases
+            # Return contact points only for collision between body1 and body2
             if bodyA == 1 and bodyB == 2:
-                return [('contact_point',)]  # Non-empty = collision
-            return []
+                return [('contact_point',)]  # Non-empty list indicates collision
+            return []  # Empty list indicates no collision
     
     class MockSim:
         def __init__(self):
+            # Map object names to body IDs
             self._bodies_idx = {'obj1': 1, 'obj2': 2, 'obj3': 3}
             self.physics_client = MockPhysicsClient()
     
     sim = MockSim()
     
-    # Test collision
+    # Test collision scenarios
     assert check_object_collision(sim, 'obj1', 'obj2') == True, "Should detect collision"
     assert check_object_collision(sim, 'obj1', 'obj3') == False, "Should not detect collision"
     assert check_object_collision(sim, 'obj2', 'obj3') == False, "Should not detect collision"
@@ -228,7 +239,7 @@ def test_collision_mock():
 
 
 def test_with_real_environment():
-    """Test with actual environment (optional)"""
+    """Integration test with actual PyBullet environment (optional)"""
     print("\nTesting with real environment...")
     print("  (This requires PyBullet to be working)")
     
@@ -236,6 +247,7 @@ def test_with_real_environment():
         import gymnasium as gym
         import envs
         
+        # Create actual environment instance
         env = gym.make("StrategicPushAndGrasp-v0", render_mode="human")
         obs, info = env.reset()
         
@@ -245,19 +257,19 @@ def test_with_real_environment():
             check_workspace_violation
         )
         
-        # Get first object
+        # Test with real objects from the environment
         if len(env.objects) > 0:
-            obj_name = list(env.objects.keys())[0]
+            obj_name = list(env.objects.keys())[0]  # Get first object
             
-            # Test stability
+            # Test stability with real physics
             stable = is_object_stable(env.sim, obj_name)
             print(f"  ✓ Object {obj_name} stable: {stable}")
             
-            # Test velocity
+            # Test velocity measurement
             lin_speed, ang_speed = get_object_velocity_magnitude(env.sim, obj_name)
             print(f"  ✓ Velocity: lin={lin_speed:.4f}, ang={ang_speed:.4f}")
             
-            # Test workspace
+            # Test workspace boundaries
             bounds = (-0.3, 0.3, -0.3, 0.3)
             violated = check_workspace_violation(env.sim, obj_name, bounds)
             print(f"  ✓ Workspace violation: {violated}")
@@ -277,13 +289,13 @@ if __name__ == "__main__":
     
     all_passed = True
     
-    # Test 1: Imports
+    # Test 1: Import verification (critical - stops if fails)
     if not test_imports():
         all_passed = False
         print("\nCannot proceed - import errors")
         sys.exit(1)
     
-    # Test 2-7: Unit tests
+    # Test 2-7: Core unit test suite
     tests = [
         test_workspace_violation_logic,
         test_stability_check,
@@ -293,6 +305,7 @@ if __name__ == "__main__":
         test_collision_mock
     ]
     
+    # Execute all unit tests
     for test_func in tests:
         try:
             test_func()
@@ -305,12 +318,13 @@ if __name__ == "__main__":
             traceback.print_exc()
             all_passed = False
     
-    # Test 8: Real environment (optional)
+    # Test 8: Optional integration test with real physics
     try:
         test_with_real_environment()
     except Exception as e:
         print(f"  ⚠ Real environment test failed: {e}")
     
+    # Final test results summary
     print("\n" + "=" * 60)
     if all_passed:
         print("✓ ALL CORE TESTS PASSED")
