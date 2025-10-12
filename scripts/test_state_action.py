@@ -22,7 +22,6 @@ TESTS 8-10: ROBUSTNESS & CONSISTENCY
 USAGE: Run this file directly to execute full test suite.
         All tests must pass for environment to be considered stable.
 """
-"""
 
 import numpy as np
 import gymnasium as gym
