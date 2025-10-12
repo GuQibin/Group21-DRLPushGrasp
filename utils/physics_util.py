@@ -141,7 +141,36 @@ def check_robot_link_collision(sim, robot_body_name: str,
         print(f"Warning: Error checking robot link collision: {e}")
         return False
 
-
+def check_self_collision(sim, body_name: str) -> bool:
+    """
+    Check if robot has self-collision between its links.
+    
+    Args:
+        sim: PyBullet simulation instance
+        body_name: Name of robot body
+    
+    Returns:
+        has_self_collision: True if any links are colliding with each other
+    """
+    try:
+        body_id = sim._bodies_idx.get(body_name)
+        if body_id is None:
+            return False
+        
+        # Get all contact points for this body
+        contact_points = sim.physics_client.getContactPoints(bodyA=body_id)
+        
+        # Check if any contacts are with itself
+        for contact in contact_points:
+            body_b_id = contact[2]
+            if body_b_id == body_id:
+                return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Warning: Error checking self-collision: {e}")
+        return False
 
 def get_contact_force(sim, body_name1: str, body_name2: str) -> float:
     """
@@ -178,6 +207,100 @@ def get_contact_force(sim, body_name1: str, body_name2: str) -> float:
         print(f"Warning: Error getting contact force: {e}")
         return 0.0
 
+def get_contact_details(sim, body_name1: str, body_name2: str) -> List[dict]:
+    """
+    Get detailed contact point information between two bodies.
+    
+    Args:
+        sim: PyBullet simulation instance
+        body_name1: First object name
+        body_name2: Second object name
+    
+    Returns:
+        List of contact dictionaries with detailed information
+    """
+    try:
+        body_id1 = sim._bodies_idx.get(body_name1)
+        body_id2 = sim._bodies_idx.get(body_name2)
+        
+        if body_id1 is None or body_id2 is None:
+            return []
+        
+        contact_points = sim.physics_client.getContactPoints(
+            bodyA=body_id1,
+            bodyB=body_id2
+        )
+        
+        contacts = []
+        for cp in contact_points:
+            contact_info = {
+                'contact_flag': cp[0],
+                'body_a_id': cp[1],
+                'body_b_id': cp[2],
+                'link_a_id': cp[3],
+                'link_b_id': cp[4],
+                'position_on_a': np.array(cp[5]),
+                'position_on_b': np.array(cp[6]),
+                'contact_normal': np.array(cp[7]),
+                'contact_distance': cp[8],
+                'normal_force': cp[9],
+                'lateral_friction_1': cp[10],
+                'lateral_friction_dir_1': np.array(cp[11]),
+                'lateral_friction_2': cp[12],
+                'lateral_friction_dir_2': np.array(cp[13]),
+            }
+            contacts.append(contact_info)
+        
+        return contacts
+        
+    except Exception as e:
+        print(f"Warning: Error getting contact details: {e}")
+        return []
+
+def get_all_collisions(sim, body_name: str) -> List[Tuple[str, float]]:
+    """
+    Get all objects currently colliding with the specified body.
+    
+    Args:
+        sim: PyBullet simulation instance
+        body_name: Name of body to check
+    
+    Returns:
+        List of (colliding_body_name, contact_force) tuples
+    """
+    try:
+        body_id = sim._bodies_idx.get(body_name)
+        if body_id is None:
+            return []
+        
+        collisions = []
+        contact_points = sim.physics_client.getContactPoints(bodyA=body_id)
+        
+        # Group by body B and sum forces
+        body_forces = {}
+        for contact in contact_points:
+            body_b_id = contact[2]
+            force = abs(contact[9])
+            
+            # Find body name from ID
+            body_b_name = None
+            for name, bid in sim._bodies_idx.items():
+                if bid == body_b_id:
+                    body_b_name = name
+                    break
+            
+            if body_b_name and body_b_name != body_name:
+                if body_b_name in body_forces:
+                    body_forces[body_b_name] += force
+                else:
+                    body_forces[body_b_name] = force
+        
+        collisions = list(body_forces.items())
+        return collisions
+        
+    except Exception as e:
+        print(f"Warning: Error getting collisions for {body_name}: {e}")
+        return []
 
 def draw_workspace_boundary(client, workspace_bounds: Tuple[float, float, float, float],
                            z_height: float = 0.0, color: List[float] = None,
