@@ -25,10 +25,18 @@ def get_ee_position_safe(robot) -> np.ndarray:
         if hasattr(robot, 'get_ee_position'):
             return robot.get_ee_position()
         
-        # Method 2: Use link state from simulation
-        # Panda EE link is typically link 11 (verify this!)
-        ee_link = getattr(robot, 'ee_link', 11)
-        return robot.sim.get_link_position('panda', ee_link)
+        # Method 2: Use PyBullet directly via robot's sim
+        if hasattr(robot, 'sim'):
+            ee_link = getattr(robot, 'ee_link', 11)
+            panda_uid = robot.sim._bodies_idx.get('panda')
+            if panda_uid is not None:
+                link_state = robot.sim.physics_client.getLinkState(
+                    panda_uid, ee_link, computeForwardKinematics=1
+                )
+                return np.array(link_state[0], dtype=np.float32)
+        
+        print(f"Warning: Could not get EE position")
+        return np.zeros(3, dtype=np.float32)
         
     except Exception as e:
         print(f"Warning: Could not get EE position: {e}")
@@ -50,9 +58,19 @@ def get_ee_orientation_safe(robot) -> np.ndarray:
         if hasattr(robot, 'get_ee_orientation'):
             return robot.get_ee_orientation()
         
-        # Method 2: Use link state
-        ee_link = getattr(robot, 'ee_link', 11)
-        return robot.sim.get_link_orientation('panda', ee_link)
+        # Method 2: Use PyBullet directly via robot's sim
+        if hasattr(robot, 'sim'):
+            ee_link = getattr(robot, 'ee_link', 11)
+            panda_uid = robot.sim._bodies_idx.get('panda')
+            if panda_uid is not None:
+                link_state = robot.sim.physics_client.getLinkState(
+                    panda_uid, ee_link, computeForwardKinematics=1
+                )
+                # link_state[1] is world orientation quaternion
+                return np.array(link_state[1], dtype=np.float32)
+        
+        print(f"Warning: Could not get EE orientation")
+        return np.array([0, 0, 0, 1], dtype=np.float32)
         
     except Exception as e:
         print(f"Warning: Could not get EE orientation: {e}")
