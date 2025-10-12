@@ -583,3 +583,94 @@ def wait_for_stability(sim, object_name: str, max_steps: int = 50,
             return False
     
     return False
+
+def diagnose_robot_control(robot, sim, steps: int = 10):
+    """
+    Diagnose robot control to verify action space format.
+    
+    Args:
+        robot: Panda robot instance
+        sim: PyBullet simulation instance
+        steps: Number of test steps
+    """
+    print("\n" + "="*60)
+    print("ROBOT CONTROL DIAGNOSTICS")
+    print("="*60)
+    
+    # Get initial state
+    initial_pos = get_ee_position_safe(robot)
+    initial_obs = robot.get_obs()
+    
+    print(f"Initial EE position: {initial_pos}")
+    print(f"Initial joint angles: {initial_obs[:7]}")
+    print(f"Observation shape: {initial_obs.shape}")
+    
+    # Test 1: Send zero action
+    print("\nTest 1: Zero action (no movement)")
+    for _ in range(10):
+        robot.set_action(np.array([0.0, 0.0, 0.0, 0.0]))
+        sim.step()
+    
+    pos_after_zero = get_ee_position_safe(robot)
+    delta_zero = np.linalg.norm(pos_after_zero - initial_pos)
+    print(f"Position after zero action: {pos_after_zero}")
+    print(f"Movement: {delta_zero:.6f}m (should be ~0)")
+    
+    # Test 2: Send small positive X action
+    print("\nTest 2: Positive X delta (+0.01m)")
+    for _ in range(steps):
+        robot.set_action(np.array([0.01, 0.0, 0.0, 0.0]))
+        sim.step()
+    
+    pos_after_x = get_ee_position_safe(robot)
+    delta_x = pos_after_x - pos_after_zero
+    print(f"Position after +X action: {pos_after_x}")
+    print(f"Delta: {delta_x}")
+    print(f"Expected: [+0.1, 0, 0] (10 steps × 0.01)")
+    print(f"Actual magnitude: {np.linalg.norm(delta_x):.6f}m")
+    
+    # Test 3: Check gripper
+    print("\nTest 3: Gripper control")
+    gripper_state_initial = get_gripper_state(robot)
+    print(f"Initial gripper: {gripper_state_initial}")
+    
+    # Open gripper
+    for _ in range(20):
+        robot.set_action(np.array([0.0, 0.0, 0.0, 1.0]))
+        sim.step()
+    
+    gripper_state_open = get_gripper_state(robot)
+    print(f"After open command: {gripper_state_open}")
+    
+    # Close gripper
+    for _ in range(20):
+        robot.set_action(np.array([0.0, 0.0, 0.0, -1.0]))
+        sim.step()
+    
+    gripper_state_closed = get_gripper_state(robot)
+    print(f"After close command: {gripper_state_closed}")
+    
+    print("\n" + "="*60)
+    print("DIAGNOSIS SUMMARY")
+    print("="*60)
+    
+    if delta_zero < 0.001:
+        print(" Zero action works correctly")
+    else:
+        print(" Zero action caused movement - check action space!")
+    
+    if 0.05 < np.linalg.norm(delta_x) < 0.15:
+        print(" Position delta control works")
+    else:
+        print(" Position control not working as expected")
+        print("   Check if action space is [dx, dy, dz, gripper]")
+        print("   Or if it's [target_x, target_y, target_z, gripper]")
+    
+    if gripper_state_open['is_open'] and gripper_state_closed['is_closed']:
+        print("Gripper control works")
+    else:
+        print(" Gripper control issue")
+        print(f"   Open state: {gripper_state_open}")
+        print(f"   Closed state: {gripper_state_closed}")
+    
+    print("="*60 + "\n")
