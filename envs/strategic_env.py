@@ -90,24 +90,6 @@ class StrategicPushAndGraspEnv(gym.Env):
         print("=" * 70)
         print("Initializing Strategic Push-Grasp Environment (ME5418)")
         print("=" * 70)
-
-        print("\n[DIAGNOSTIC] Checking robot observation structure...")
-        test_obs = self.robot.get_obs()
-        print(f"  robot.get_obs() shape: {test_obs.shape}")
-        print(f"  robot.get_obs() values: {test_obs}")
-        
-        # Check what Panda actually provides
-        if hasattr(self.robot, 'control_type'):
-            print(f"  robot.control_type: {self.robot.control_type}")
-
-        panda_uid = self.sim._bodies_idx.get("panda")
-        if panda_uid:
-            print(f"  Testing direct velocity access:")
-            for i in range(7):
-                vel = self.sim.get_joint_velocity('panda', i)
-                print(f"    Joint {i} velocity: {vel:.6f}")
-        
-        print("[DIAGNOSTIC] Done\n")
         
         # 1. Create simulation and robot
         self.sim = PyBullet(render_mode=render_mode)
@@ -156,6 +138,23 @@ class StrategicPushAndGraspEnv(gym.Env):
         print(f"  Formula: 28 + {self.MAX_OBJECTS}×21 + {self.MAX_OBJECTS}² + {self.MAX_OBJECTS}")
         print("=" * 70 + "\n")
 
+        print("\n[DIAGNOSTIC] Checking robot observation structure...")
+        test_obs = self.robot.get_obs()
+        print(f"  robot.get_obs() shape: {test_obs.shape}")
+        print(f"  robot.get_obs() values: {test_obs}")
+        
+        # Check what Panda actually provides
+        if hasattr(self.robot, 'control_type'):
+            print(f"  robot.control_type: {self.robot.control_type}")
+
+        panda_uid = self.sim._bodies_idx.get("panda")
+        if panda_uid:
+            print(f"  Testing direct velocity access:")
+            for i in range(7):
+                vel = self.sim.get_joint_velocity('panda', i)
+                print(f"    Joint {i} velocity: {vel:.6f}")
+        
+        print("[DIAGNOSTIC] Done\n")
     def _draw_goal_square(self):
         """Draw green square outline for goal zone."""
         half_size = self.goal_size / 2
@@ -826,6 +825,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
