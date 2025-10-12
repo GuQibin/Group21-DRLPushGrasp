@@ -107,6 +107,41 @@ def check_object_collision(sim, body_name1: str, body_name2: str) -> bool:
         print(f"Warning: Error checking object collision: {e}")
         return False
 
+def check_robot_link_collision(sim, robot_body_name: str, 
+                               link_id: int,
+                               other_body_name: str) -> bool:
+    """
+    Check if a specific robot link is colliding with another object.
+    
+    Args:
+        sim: PyBullet simulation instance
+        robot_body_name: Name of robot body (e.g., "panda")
+        link_id: Specific link index to check
+        other_body_name: Name of other object
+    
+    Returns:
+        has_collision: True if specified link is in contact
+    """
+    try:
+        robot_id = sim._bodies_idx.get(robot_body_name)
+        other_id = sim._bodies_idx.get(other_body_name)
+        
+        if robot_id is None or other_id is None:
+            return False
+        
+        contact_points = sim.physics_client.getContactPoints(
+            bodyA=robot_id,
+            bodyB=other_id,
+            linkIndexA=link_id
+        )
+        
+        return len(contact_points) > 0
+        
+    except Exception as e:
+        print(f"Warning: Error checking robot link collision: {e}")
+        return False
+
+
 
 def get_contact_force(sim, body_name1: str, body_name2: str) -> float:
     """
@@ -203,8 +238,19 @@ def is_object_stable(sim, body_name: str,
         
         lin_speed = np.linalg.norm(lin_vel)
         ang_speed = np.linalg.norm(ang_vel)
+
+        velocity_stable = (lin_speed < velocity_threshold and 
+                          ang_speed < angular_velocity_threshold)
+      
+        # Additional check: position hasn't changed much
+        if position_history and len(position_history) >= 2:
+            current_pos = sim.get_base_position(body_name)
+            last_pos = position_history[-1]
+            pos_change = np.linalg.norm(np.array(current_pos) - np.array(last_pos))
+            position_stable = pos_change < position_threshold
+            return velocity_stable and position_stable
         
-        return lin_speed < velocity_threshold and ang_speed < angular_velocity_threshold
+        return velocity_stable
         
     except Exception as e:
         print(f"Warning: Could not check stability for {body_name}: {e}")
