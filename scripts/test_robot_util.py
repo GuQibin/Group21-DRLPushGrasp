@@ -350,14 +350,14 @@ def test_robot_diagnostics():
         diagnose_robot_control(env.unwrapped.robot, env.unwrapped.sim, steps=10)
         
         env.close()
+        print("  ✓ Diagnostics complete")
         
     except Exception as e:
-        print(f" Diagnostics failed: {e}")
+        print(f"  ⚠ Diagnostics failed: {e}")
         import traceback
         traceback.print_exc()
-
-
-if __name__ == "__main__":
+Then modify the if __name__ == "__main__": section:
+pythonif __name__ == "__main__":
     print("=" * 60)
     print("Testing utils/robot_util.py")
     print("=" * 60 + "\n")
@@ -367,7 +367,7 @@ if __name__ == "__main__":
     # Test 1: Imports
     if not test_basic_imports():
         all_passed = False
-        print("\n Cannot proceed - import errors")
+        print("\n❌ Cannot proceed - import errors")
         sys.exit(1)
     
     # Test 2-5: Unit tests (don't require PyBullet)
@@ -382,41 +382,42 @@ if __name__ == "__main__":
         try:
             test_func()
         except AssertionError as e:
-            print(f" Test failed: {e}")
+            print(f"  ❌ Test failed: {e}")
             all_passed = False
         except Exception as e:
-            print(f" Unexpected error: {e}")
+            print(f"  ❌ Unexpected error: {e}")
             import traceback
             traceback.print_exc()
             all_passed = False
     
+    # **ADD THIS SECTION - DIAGNOSTICS BEFORE INTEGRATION TESTS**
     print("\n" + "=" * 60)
-    print("ROBOT DIAGNOSTICS")
+    print("ROBOT DIAGNOSTICS (Critical for debugging)")
     print("=" * 60)
     test_robot_diagnostics()
     
     # Test 6-8: Integration tests (require PyBullet - optional)
+    print("\n" + "=" * 60)
+    print("INTEGRATION TESTS (Optional - require PyBullet GUI)")
+    print("=" * 60)
+    
     integration_tests = [
         ("Basic environment", test_with_real_environment),
         ("Pick-and-place", test_pick_and_place_dry_run),
         ("Push", test_push_dry_run)
     ]
     
-    print("\n" + "=" * 60)
-    print("INTEGRATION TESTS (Optional - require PyBullet GUI)")
-    print("=" * 60)
-    
     for test_name, test_func in integration_tests:
         try:
             test_func()
         except Exception as e:
             print(f"  ⚠ {test_name} test failed: {e}")
-            print(f"  This is expected if PyBullet GUI isn't available")
+            print(f"  This is expected if robot control needs tuning")
     
     print("\n" + "=" * 60)
     if all_passed:
-        print(" ALL CORE TESTS PASSED")
-        print("  (Integration tests are optional)")
+        print("✓ ALL CORE TESTS PASSED")
+        print("  (Integration tests may need robot tuning)")
     else:
-        print(" SOME TESTS FAILED")
+        print("✗ SOME TESTS FAILED")
     print("=" * 60)
