@@ -95,13 +95,10 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.sim = PyBullet(render_mode=render_mode)
         self.robot = Panda(
             self.sim,
-            block_gripper=False,
-            base_position=np.array([0.4, -0.3, 0.0]),
-            control_type="ee"  
-    )
-        print(f"✓ Robot: 7-DOF Panda at position [0.4, -0.3, 0.0]")
-        print(f"  Control type: {getattr(self.robot, 'control_type', 'unknown')}")
-        print(f"  Block gripper: {getattr(self.robot, 'block_gripper', 'unknown')}")
+            block_gripper=False,  # Enable gripper control
+            base_position=np.array([0.4, -0.3, 0.0])
+        )
+        print("✓ Robot: 7-DOF Panda at position [0.4, -0.3, 0.0]")
         
         # 2. Action space: A = (α_skill, α_x, α_y, α_θ) ∈ [-1, 1]^4
         self.action_space = spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32)
@@ -128,33 +125,16 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.action_was_successful = True
         
         # 6. Define observation space
-        obs_dim = 28 + self.MAX_OBJECTS * 21 + self.MAX_OBJECTS**2 + self.MAX_OBJECTS
+        initial_obs, _ = self.reset()
         self.observation_space = spaces.Box(
             -np.inf, np.inf,
-            shape=(obs_dim,),
+            shape=initial_obs.shape,
             dtype=np.float32
         )
-        print(f"✓ Observation space: {obs_dim}D (padded to MAX_OBJECTS={self.MAX_OBJECTS})")
-        print(f"  Formula: 28 + {self.MAX_OBJECTS}×21 + {self.MAX_OBJECTS}² + {self.MAX_OBJECTS}")
+        print(f"✓ Observation space: {self.observation_space.shape[0]}D")
+        print(f"  Formula: 28 + 22N + N² (N = number of objects)")
         print("=" * 70 + "\n")
 
-        print("\n[DIAGNOSTIC] Checking robot observation structure...")
-        test_obs = self.robot.get_obs()
-        print(f"  robot.get_obs() shape: {test_obs.shape}")
-        print(f"  robot.get_obs() values: {test_obs}")
-        
-        # Check what Panda actually provides
-        if hasattr(self.robot, 'control_type'):
-            print(f"  robot.control_type: {self.robot.control_type}")
-
-        panda_uid = self.sim._bodies_idx.get("panda")
-        if panda_uid:
-            print(f"  Testing direct velocity access:")
-            for i in range(7):
-                vel = self.sim.get_joint_velocity('panda', i)
-                print(f"    Joint {i} velocity: {vel:.6f}")
-        
-        print("[DIAGNOSTIC] Done\n")
     def _draw_goal_square(self):
         """Draw green square outline for goal zone."""
         half_size = self.goal_size / 2
@@ -202,55 +182,31 @@ class StrategicPushAndGraspEnv(gym.Env):
 
     def _get_robot_state(self) -> Dict[str, np.ndarray]:
         robot_obs = self.robot.get_obs()
-        print(f"[DEBUG _get_robot_state] robot_obs shape: {robot_obs.shape}")
-        print(f"[DEBUG _get_robot_state] robot_obs: {robot_obs}")
 
-        # Get joint velocities - CHECK IF THEY EXIST
-        if robot_obs.shape[0] >= 14:
-            joint_velocities = robot_obs[7:14]
-        else:
-            # Fallback: compute velocities or use zeros
-            print("[WARNING] Joint velocities not in observation, using zeros")
-            joint_velocities = np.zeros(7, dtype=np.float32)
-        
-        print(f"[DEBUG] joint_velocities shape: {joint_velocities.shape}")
-        
-        # Check if velocities are actually zeros (might be missing from Panda)
-        if np.allclose(joint_velocities, 0) and robot_obs.shape[0] >= 14:
-            print("[WARNING] Joint velocities are all zero - might not be populated by Panda")
-        
-        # For orientation, check if method exists
+        # --- 取 EE 位姿（位置仍用现有接口；姿态增加兜底） ---
         ee_pos = self.robot.get_ee_position()
 
         try:
-            ee_quat = self.robot.get_ee_orientation()
+            ee_quat = self.robot.get_ee_orientation()  # 先尝试官方接口
         except AttributeError:
-            # Fallback to PyBullet
-            panda_uid = self.sim._bodies_idx.get("panda")
-            ee_link = getattr(self.robot, "ee_link", 11)
+            # 兜底：直接用 PyBullet 取链接姿态四元数
+            panda_uid = self.sim._bodies_idx.get("panda")  # 你的工程里 body 名一般就是 'panda'
+            ee_link = getattr(self.robot, "ee_link", None) # Panda 类通常有 ee_link 索引
             if panda_uid is not None and ee_link is not None:
                 ee_quat = np.array(
                     p.getLinkState(panda_uid, ee_link, computeForwardKinematics=1)[1],
                     dtype=np.float32
                 )
             else:
+                # 最保守的兜底：单位四元数
                 ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
-        
-        # Get gripper width
-        if robot_obs.shape[0] >= 16:
-            gripper_width = np.array([np.mean(robot_obs[14:16])], dtype=np.float32)
-        else:
-            gripper_width = np.array([0.0], dtype=np.float32)
-        
-        print(f"[DEBUG] Final shapes: jp={joint_positions.shape}, jv={joint_velocities.shape}, "
-              f"ee_pos={ee_pos.shape}, ee_quat={ee_quat.shape}, gripper={gripper_width.shape}")
-        
+
         return {
-            'joint_positions': joint_positions.astype(np.float32),
-            'joint_velocities': joint_velocities.astype(np.float32),
-            'ee_position': ee_pos.astype(np.float32),
-            'ee_orientation': ee_quat.astype(np.float32),
-            'gripper_width': gripper_width.astype(np.float32),
+            'joint_positions':    robot_obs[:7],
+            'joint_velocities':   robot_obs[7:14],
+            'ee_position':        ee_pos,
+            'ee_orientation':     ee_quat,
+            'gripper_width':      np.array([np.mean(robot_obs[14:16])], dtype=np.float32),
         }
 
 
@@ -427,56 +383,45 @@ class StrategicPushAndGraspEnv(gym.Env):
         
         # 2. Object states (N×21D)
         objects = self._get_object_states()
-        N_actual = len(self.objects)
-        N_max = self.MAX_OBJECTS
+        N = len(self.objects)
         
-        if N_actual > 0:
+        if N > 0:
             object_vector = np.concatenate([
-                objects['positions'].flatten(),
-                objects['orientations'].flatten(),
-                objects['velocities'].flatten(),
-                objects['angular_velocities'].flatten(),
-                objects['shape_descriptors'].flatten()
+                objects['positions'].flatten(),           # N×3
+                objects['orientations'].flatten(),        # N×4
+                objects['velocities'].flatten(),          # N×3
+                objects['angular_velocities'].flatten(),  # N×3
+                objects['shape_descriptors'].flatten()    # N×8
             ])
-            # Pad to MAX_OBJECTS × 21D
-            padding_size = (N_max - N_actual) * 21
-            object_vector = np.concatenate([object_vector, np.zeros(padding_size, dtype=np.float32)])
         else:
-        # All zeros if no objects
-            object_vector = np.zeros(N_max * 21, dtype=np.float32)
+            object_vector = np.array([])
         
         # 3. Spatial relationships
         spatial = self._get_spatial_relationships()
-    
-        # Distance matrix: pad from N×N to MAX×MAX
-        distance_matrix_padded = np.zeros((N_max, N_max), dtype=np.float32)
-        if N_actual > 0:
-            distance_matrix_padded[:N_actual, :N_actual] = spatial['distance_matrix']
-        distance_matrix_flat = distance_matrix_padded.flatten()
-        occlusion_padded = np.zeros(N_max, dtype=np.float32)
-        if N_actual > 0:
-            occlusion_padded[:N_actual] = spatial['occlusion_mask'].astype(np.float32)
+        distance_matrix_flat = spatial['distance_matrix'].flatten()
+        occlusion_mask = spatial['occlusion_mask']
         
         # 4. Environment information (6D)
         env_info = np.array([
-            self.goal_pos[0],
-            self.goal_pos[1],
-            self.goal_size,
-            self.table_bounds[0],
-            self.table_bounds[1],
-            float(N_actual) 
+            self.goal_pos[0],      # Goal X
+            self.goal_pos[1],      # Goal Y
+            self.goal_size,        # Goal size
+            self.table_bounds[0],  # Table X bound
+            self.table_bounds[1],  # Table Y bound
+            float(N)               # Number of objects
         ], dtype=np.float32)
         
         # 5. Concatenate all components
-        obs = np.concatenate([
-            robot_vector,      # 22D
-            env_info,          # 6D
-            object_vector,     # MAX × 21D
-            distance_matrix_flat,  # MAX²
-            occlusion_padded   # MAX
-        ])
+        obs_components = [robot_vector, env_info]
         
-        return obs.astype(np.float32)
+        if N > 0:
+            obs_components.extend([
+                object_vector,
+                distance_matrix_flat,
+                occlusion_mask.astype(np.float32)
+            ])
+        
+        return np.concatenate(obs_components)
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """
@@ -825,10 +770,3 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
-
-
-
-
-
-
-
