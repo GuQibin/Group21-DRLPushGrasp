@@ -137,7 +137,7 @@ def execute_pick_and_place(sim, robot, target_object: str,
         open_gripper(sim, robot, steps=10)  # Release and give up
         return False
     
-    print(f"  ✓ Successfully grasped {target_object}")
+    print(f"  Successfully grasped {target_object}")
     
     print(f"  Phase 5: Lifting object...")
     # Phase 5: Lift
@@ -162,7 +162,7 @@ def execute_pick_and_place(sim, robot, target_object: str,
     retract_pos[2] = approach_height
     move_to_position(sim, robot, retract_pos, gripper_open=True, steps=30)
     
-    print(f"  ✓ Pick-and-place complete!")
+    print(f"  Pick-and-place complete!")
     return True
 
 
@@ -199,7 +199,7 @@ def execute_push(sim, robot, target_object: str,
         obj_pos = np.array(sim.get_base_position(target_object))
         obj_ori = sim.get_base_orientation(target_object)
     except Exception as e:
-        print(f"❌ Error: Could not get position for {target_object}: {e}")
+        print(f"Error: Could not get position for {target_object}: {e}")
         return False
     
     # Convert alpha_x, alpha_y to contact offset
@@ -231,7 +231,7 @@ def execute_push(sim, robot, target_object: str,
     # Phase 1: Move to pre-push position
     success = move_to_position(sim, robot, pre_push_pos, gripper_open=True, steps=40)
     if not success:
-        print(f"  ❌ Failed to reach pre-push position for {target_object}")
+        print(f"  Failed to reach pre-push position for {target_object}")
         return False
     
     print(f"  Phase 2: Executing push...")
@@ -239,7 +239,7 @@ def execute_push(sim, robot, target_object: str,
     post_push_pos = contact_point + push_direction * push_distance
     success = move_to_position(sim, robot, post_push_pos, gripper_open=True, steps=30)
     if not success:
-        print(f"  ⚠ Push may have been incomplete")
+        print(f"  Push may have been incomplete")
     
     print(f"  Phase 3: Retracting...")
     # Phase 3: Retract (move back and up)
@@ -247,7 +247,7 @@ def execute_push(sim, robot, target_object: str,
     retract_pos[2] += 0.1
     move_to_position(sim, robot, retract_pos, gripper_open=True, steps=20)
     
-    print(f"  ✓ Push complete!")
+    print(f" Push complete!")
     return True
 
 
@@ -274,6 +274,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
     # Standard panda-gym: 1.0 = open, -1.0 = close
     # OR: 0.04 = open, 0.0 = close (depends on version)
     # Check your Panda implementation to determine correct values!
+    obs = robot.get_obs()
     gripper_ctrl = 1.0 if gripper_open else -1.0
     
     for step in range(steps):
@@ -282,43 +283,49 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
             current_pos = get_ee_position_safe(robot)
             
             if current_pos is None or np.any(np.isnan(current_pos)):
-                print(f"  ⚠ Warning: Invalid current position at step {step}")
+                print(f" Invalid position at step {step}")
                 return False
             
             error = target_pos - current_pos
             
             # Proportional control with clipping
             # Action is [dx, dy, dz, gripper]
-            delta = np.clip(error * 2.0, -0.05, 0.05)  # Max 5cm per step
+            delta = np.clip(error * 2.0, -0.05, 0.05)
             action = np.concatenate([delta, [gripper_ctrl]])
             
             # Use robot's set_action method
             robot.set_action(action)
-            
-            # CRITICAL: Step simulation
             sim.step()
             
             # Early termination if close enough
-            if np.linalg.norm(error) < 0.01:  # Within 1cm
+            if step % 10 == 0:
+                current_error = np.linalg.norm(error)
+                if step > 0 and current_error > previous_error * 1.1:
+                    print(f" Error increasing: {current_error:.4f}m")
+                previous_error = current_error
+            
+            if np.linalg.norm(error) < 0.01:
                 return True
                 
         except Exception as e:
-            print(f"  ❌ Error during movement step {step}: {e}")
+            print(f" Error during movement step {step}: {e}")
             return False
     
     # Check final error
     try:
         final_pos = get_ee_position_safe(robot)
         final_error = np.linalg.norm(target_pos - final_pos)
-        success = final_error < 0.02  # Within 2cm is acceptable
+        success = final_error < 0.02
         
         if not success:
-            print(f"  ⚠ Warning: Final error {final_error:.4f}m exceeds threshold")
+            print(f"  Final error: {final_error:.4f}m")
+            print(f"  Target: {target_pos}")
+            print(f"  Actual: {final_pos}")
         
         return success
         
     except Exception as e:
-        print(f"  ❌ Error checking final position: {e}")
+        print(f"  Error checking final position: {e}")
         return False
 
 
