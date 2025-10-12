@@ -76,7 +76,6 @@ def get_ee_orientation_safe(robot) -> np.ndarray:
         print(f"Warning: Could not get EE orientation: {e}")
         return np.array([0, 0, 0, 1], dtype=np.float32)
 
-
 def execute_pick_and_place(sim, robot, target_object: str, 
                           alpha_x: float, alpha_y: float, 
                           goal_pos: np.ndarray,
