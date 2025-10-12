@@ -185,52 +185,52 @@ class StrategicPushAndGraspEnv(gym.Env):
     #     }
 
     def _get_robot_state(self) -> Dict[str, np.ndarray]:
-    """
-    Get complete robot state (22D).
+        """
+        Get complete robot state (22D).
+        
+        Returns:
+            Dictionary with:
+            - joint_positions: 7D
+            - joint_velocities: 7D
+            - ee_position: 3D
+            - ee_orientation: 4D (quaternion)
+            - gripper_width: 1D
+        """
+        robot_obs = self.robot.get_obs()
+        
+        # Get joint positions from observation (first 7 elements)
+        joint_positions = np.array(robot_obs[:7], dtype=np.float32)
+        
+        # Get joint VELOCITIES directly from PyBullet (NOT in robot.get_obs())
+        joint_velocities = np.zeros(7, dtype=np.float32)
+        panda_uid = self.sim._bodies_idx.get("panda")
+        
+        if panda_uid is not None:
+            # Panda has 7 arm joints (indices 0-6)
+            for i in range(7):
+                try:
+                    joint_velocities[i] = self.sim.get_joint_velocity("panda", i)
+                except:
+                    joint_velocities[i] = 0.0
+        
+        # Get gripper state (indices 7-8 in robot_obs for finger positions)
+        if len(robot_obs) >= 9:
+            gripper_state = np.array(robot_obs[7:9], dtype=np.float32)
+        else:
+            gripper_state = np.zeros(2, dtype=np.float32)
+        
+        # Get EE pose using safe methods from robot_util
+        from utils.robot_util import get_ee_position_safe, get_ee_orientation_safe
+        ee_pos = get_ee_position_safe(self.robot)
+        ee_quat = get_ee_orientation_safe(self.robot)
     
-    Returns:
-        Dictionary with:
-        - joint_positions: 7D
-        - joint_velocities: 7D
-        - ee_position: 3D
-        - ee_orientation: 4D (quaternion)
-        - gripper_width: 1D
-    """
-    robot_obs = self.robot.get_obs()
-    
-    # Get joint positions from observation (first 7 elements)
-    joint_positions = np.array(robot_obs[:7], dtype=np.float32)
-    
-    # Get joint VELOCITIES directly from PyBullet (NOT in robot.get_obs())
-    joint_velocities = np.zeros(7, dtype=np.float32)
-    panda_uid = self.sim._bodies_idx.get("panda")
-    
-    if panda_uid is not None:
-        # Panda has 7 arm joints (indices 0-6)
-        for i in range(7):
-            try:
-                joint_velocities[i] = self.sim.get_joint_velocity("panda", i)
-            except:
-                joint_velocities[i] = 0.0
-    
-    # Get gripper state (indices 7-8 in robot_obs for finger positions)
-    if len(robot_obs) >= 9:
-        gripper_state = np.array(robot_obs[7:9], dtype=np.float32)
-    else:
-        gripper_state = np.zeros(2, dtype=np.float32)
-    
-    # Get EE pose using safe methods from robot_util
-    from utils.robot_util import get_ee_position_safe, get_ee_orientation_safe
-    ee_pos = get_ee_position_safe(self.robot)
-    ee_quat = get_ee_orientation_safe(self.robot)
-
-    return {
-        'joint_positions':    joint_positions,      # 7D
-        'joint_velocities':   joint_velocities,     # 7D ✓ Now correct!
-        'ee_position':        ee_pos,               # 3D
-        'ee_orientation':     ee_quat,              # 4D
-        'gripper_width':      np.array([np.mean(gripper_state)], dtype=np.float32),  # 1D
-    }
+        return {
+            'joint_positions':    joint_positions,      # 7D
+            'joint_velocities':   joint_velocities,     # 7D ✓ Now correct!
+            'ee_position':        ee_pos,               # 3D
+            'ee_orientation':     ee_quat,              # 4D
+            'gripper_width':      np.array([np.mean(gripper_state)], dtype=np.float32),  # 1D
+        }
 
 
 
@@ -813,5 +813,6 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
