@@ -118,9 +118,9 @@ def test_state_space_components():
     
     env = gym.make("StrategicPushAndGrasp-v0", render_mode="human")
     obs, info = env.reset()
-    
+    env_unwrapped = env.unwrapped
     # Component 1: Robot state (22D)
-    robot_state = env._get_robot_state()
+    robot_state = env_unwrapped._get_robot_state()  # ← Fixed
     print(f"\n1. Robot State (22D):")
     print(f"   - Joint positions: {robot_state['joint_positions'].shape}")
     assert robot_state['joint_positions'].shape == (7,), "Joint positions wrong shape"
