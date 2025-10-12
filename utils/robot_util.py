@@ -322,49 +322,36 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
         return False
 
 
-def open_gripper(sim, robot, steps: int = 20, gripper_value: float = 1.0):
-    """
-    Open gripper fully.
-    
-    Args:
-        sim: PyBullet simulation instance
-        robot: Panda robot instance
-        steps: Number of steps to execute
-        gripper_value: Target gripper control value
-                      (1.0 for standard panda-gym, or 0.04 for absolute width)
-    """
+def open_gripper(sim, robot, steps: int = 20):
+    """Open gripper - try multiple value formats."""
+    # Try format 1: Normalized [-1, 1]
     for _ in range(steps):
-        try:
-            # Action: [dx, dy, dz, gripper_control]
-            # No movement, just gripper control
-            action = np.array([0.0, 0.0, 0.0, gripper_value])
-            robot.set_action(action)
+        robot.set_action(np.array([0.0, 0.0, 0.0, 1.0]))
+        sim.step()
+    
+    # Check if it worked
+    state = get_gripper_state(robot)
+    if not state['is_open']:
+        # Try format 2: Absolute width (0.04 = 4cm open)
+        for _ in range(steps):
+            robot.set_action(np.array([0.0, 0.0, 0.0, 0.04]))
             sim.step()
-        except Exception as e:
-            print(f"  ⚠ Error opening gripper: {e}")
-            break
 
 
-def close_gripper(sim, robot, steps: int = 20, gripper_value: float = -1.0):
-    """
-    Close gripper.
-    
-    Args:
-        sim: PyBullet simulation instance
-        robot: Panda robot instance
-        steps: Number of steps to execute
-        gripper_value: Target gripper control value
-                      (-1.0 for standard panda-gym, or 0.0 for absolute width)
-    """
+def close_gripper(sim, robot, steps: int = 20):
+    """Close gripper - try multiple value formats."""
+    # Try format 1: Normalized [-1, 1]
     for _ in range(steps):
-        try:
-            # Action: [dx, dy, dz, gripper_control]
-            action = np.array([0.0, 0.0, 0.0, gripper_value])
-            robot.set_action(action)
+        robot.set_action(np.array([0.0, 0.0, 0.0, -1.0]))
+        sim.step()
+    
+    # Check if it worked
+    state = get_gripper_state(robot)
+    if not state['is_closed']:
+        # Try format 2: Absolute width (0.0 = closed)
+        for _ in range(steps):
+            robot.set_action(np.array([0.0, 0.0, 0.0, 0.0]))
             sim.step()
-        except Exception as e:
-            print(f"  ⚠ Error closing gripper: {e}")
-            break
 
 
 def check_grasp_success(sim, robot, object_name: str, 
