@@ -292,10 +292,11 @@ def get_gripper_state(robot) -> dict:
         }
 
 def execute_pick_and_place(sim, robot, target_object: str,
-                          alpha_x: float, alpha_y: float,
-                          goal_pos: np.ndarray,
-                          approach_height: float = 0.15,
-                          grasp_height: float = 0.05) -> bool:
+                           alpha_x: float, alpha_y: float,
+                           goal_pos: np.ndarray,
+                           workspace_bounds: Tuple[float, float, float, float], # <-- 1. 新增参数
+                           approach_height: float = 0.15,
+                           grasp_height: float = 0.03) -> bool:
     """
     Execute complete pick-and-place sequence for target object.
 
@@ -396,67 +397,59 @@ def execute_pick_and_place(sim, robot, target_object: str,
         return False  # Can't manipulate non-existent object
 
     # Store initial Z-coordinate for grasp verification
-    # After successful grasp, object should be lifted above this height
     initial_obj_z = obj_pos[2]
 
     # ========================================================================
     # GRASP POINT CALCULATION
     # ========================================================================
     # Convert agent's normalized action parameters to physical offsets
-    # Mapping: [-1, 1] → [-2.5cm, +2.5cm]
     offset_scale = 0.025  # 2.5cm = reasonable for 4cm objects
 
     grasp_offset = np.array([
         alpha_x * offset_scale,  # X offset (left-right)
         alpha_y * offset_scale,  # Y offset (forward-back)
-        0.0                      # Z offset (always grasp from top)
+        0.0  # Z offset (always grasp from top)
     ])
 
     # Transform offset to world frame
-    # CURRENT IMPLEMENTATION: Simplified (assumes object upright)
-    # This works when obj_ori ≈ [0, 0, 0, 1] (no rotation)
     rot_matrix = quaternion_to_rotation_matrix(obj_ori)
     grasp_offset_world = rot_matrix @ grasp_offset
     grasp_point = obj_pos + grasp_offset_world
 
     # ========================================================================
+    #  Clip the target grasp point to stay within workspace bounds
+    # ========================================================================
+    # workspace_bounds tuple structure is (x_min, x_max, y_min, y_max)
+    original_grasp_point_xy = grasp_point[:2].copy()
+    grasp_point[0] = np.clip(grasp_point[0], workspace_bounds[0], workspace_bounds[1])
+    grasp_point[1] = np.clip(grasp_point[1], workspace_bounds[2], workspace_bounds[3])
+
+    if not np.allclose(original_grasp_point_xy, grasp_point[:2]):
+        print(
+            f"  [DEBUG] grasp_point clipped from ({original_grasp_point_xy[0]:.3f}, {original_grasp_point_xy[1]:.3f}) to ({grasp_point[0]:.3f}, {grasp_point[1]:.3f})")
+    # ========================================================================
+
+    # ========================================================================
     # PHASE 1: APPROACH FROM ABOVE
     # ========================================================================
-    # Move end-effector to position directly above grasp point
-    # This avoids collisions with table and provides clear approach path
     print(f"  Phase 1: Approaching {target_object} from above...")
-
     approach_pos = grasp_point.copy()
-    approach_pos[2] = approach_height  # Lift to 15cm (safe clearance)
-
-    success = move_to_position(
-        sim, robot, approach_pos,
-        gripper_open=True,  # Keep gripper open during approach
-        steps=150, 
-        sleep_sec=SLOW           # Allow 50 timesteps for convergence
-    )
-
+    approach_pos[2] = approach_height
+    if compute_inverse_kinematics(sim, robot, approach_pos) is None:
+        print(f"  ❌ Approach position is unreachable. Aborting grasp.")
+        return False
+    success = move_to_position(sim, robot, approach_pos, gripper_open=True, steps=150, sleep_sec=SLOW)
     if not success:
         print(f"  ❌ Failed to approach {target_object}")
-        return False  # Abort if can't even reach approach position
+        return False
 
     # ========================================================================
     # PHASE 2: DESCEND TO GRASP HEIGHT
     # ========================================================================
-    # Lower gripper vertically from approach position to grasp height
-    # Vertical motion minimizes risk of knocking object away
     print(f"  Phase 2: Lowering to grasp height...")
-
     grasp_pos = grasp_point.copy()
-    grasp_pos[2] = grasp_height  # Lower to 5cm (slightly above object center)
-
-    success = move_to_position(
-        sim, robot, grasp_pos,
-        gripper_open=True,
-        steps=150, 
-        sleep_sec=SLOW# Fewer steps = slower, more controlled descent
-    )
-
+    grasp_pos[2] = grasp_height
+    success = move_to_position(sim, robot, grasp_pos, gripper_open=True, steps=150, sleep_sec=SLOW)
     if not success:
         print(f"  ❌ Failed to lower to grasp height for {target_object}")
         return False
@@ -466,29 +459,20 @@ def execute_pick_and_place(sim, robot, target_object: str,
     # ========================================================================
     print(f"  Phase 3: Closing gripper...")
     close_gripper(sim, robot, steps=60, sleep_sec=SLOW)
-    # 给接触求解一点时间
-    for _ in range(30):
-        sim.step()
+    for _ in range(30): sim.step()
 
     # ========================================================================
-    # PHASE 4: MICRO-LIFT to validate grasp  ← 关键改动
+    # PHASE 4: MICRO-LIFT to validate grasp
     # ========================================================================
     print(f"  Phase 4: Micro-lift to check grasp...")
-    # 记录关爪后的物体高度
     try:
         obj_z_before = sim.get_base_position(target_object)[2]
     except Exception:
         obj_z_before = initial_obj_z
-
-    # 微抬 3cm
     micro_lift = get_ee_position_safe(robot).copy()
     micro_lift[2] += 0.03
     move_to_position(sim, robot, micro_lift, gripper_open=False, steps=60, sleep_sec=SLOW)
-
-    # 等几帧稳定
-    for _ in range(20):
-        sim.step()
-
+    for _ in range(20): sim.step()
     obj_z_after = sim.get_base_position(target_object)[2]
     lift_gain = obj_z_after - obj_z_before
     if lift_gain < 0.01:
@@ -508,180 +492,41 @@ def execute_pick_and_place(sim, robot, target_object: str,
     # ========================================================================
     # PHASE 6: TRANSPORT TO GOAL
     # ========================================================================
-    # Move horizontally to position above goal zone
-    # Maintains safe height throughout transport
     print(f"  Phase 6: Transporting to goal...")
-
-    transport_pos = np.array([
-        goal_pos[0],      # Goal X coordinate
-        goal_pos[1],      # Goal Y coordinate
-        approach_height   # Maintain 15cm height
-    ])
-
-    move_to_position(
-        sim, robot, transport_pos,
-        gripper_open=False,  # Still holding object
-        steps=150, 
-        sleep_sec=SLOW# Allow more time for potentially longer distance
-    )
+    transport_pos = np.array([goal_pos[0], goal_pos[1], approach_height])
+    move_to_position(sim, robot, transport_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
 
     # ========================================================================
     # PHASE 7: PLACE OBJECT
     # ========================================================================
-    # Lower object to placement height and release gripper
     print(f"  Phase 7: Placing object...")
-
-    place_pos = np.array([
-        goal_pos[0],
-        goal_pos[1],
-        0.05  # Place at 5cm (just above table surface)
-    ])
-
-    move_to_position(
-        sim, robot, place_pos,
-        gripper_open=False,  # Still closed during descent
-        steps=150, 
-        sleep_sec=SLOW
-    )
-
-    # Release object
+    place_pos = np.array([goal_pos[0], goal_pos[1], 0.05])
+    move_to_position(sim, robot, place_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
     open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
 
     # ========================================================================
     # PHASE 8: RETRACT
     # ========================================================================
-    # Move gripper away from placed object
-    # Prevents accidental re-contact or pushing
     print(f"  Phase 8: Retracting...")
-
     retract_pos = place_pos.copy()
-    retract_pos[2] = approach_height  # Retract to safe height (15cm)
+    retract_pos[2] = approach_height
+    move_to_position(sim, robot, retract_pos, gripper_open=True, steps=150, sleep_sec=SLOW)
 
-    move_to_position(
-        sim, robot, retract_pos,
-        gripper_open=True,  # Open gripper during retract
-        steps=150, 
-        sleep_sec=SLOW
-    )
-
-    # ========================================================================
-    # SUCCESS - All 8 phases completed
-    # ========================================================================
     print(f"  ✓ Pick-and-place complete!")
     return True
 
 
 def execute_push(sim, robot, target_object: str,
-                alpha_x: float, alpha_y: float, alpha_theta: float,
-                push_distance: float = 0.05,
-                push_height: float = 0.03,
-                use_object_frame: bool = True) -> bool:
+                 alpha_x: float, alpha_y: float, alpha_theta: float,
+                 workspace_bounds: Tuple[float, float, float, float],  # <-- 1. 新增参数
+                 push_distance: float = 0.05,
+                 push_height: float = 0.03,
+                 use_object_frame: bool = True) -> bool:
     """
     Execute push primitive on target object.
 
-    ═══════════════════════════════════════════════════════════════════════
-    PRIMARY ACTION PRIMITIVE #2: PUSHING
-    ═══════════════════════════════════════════════════════════════════════
-
-    This is the second of two learned manipulation strategies. The agent learns:
-    - WHEN to push (via α_skill ≤ 0 in action vector)
-    - WHERE to contact (via α_x, α_y parameters)
-    - WHICH DIRECTION to push (via α_θ parameter)
-
-    Three-Phase Sequence:
-    ┌────────────────────────────────────────────────────────────────┐
-    │ Phase 1: Pre-push    → Move to position behind contact point  │
-    │ Phase 2: Execute     → Linear push motion through object      │
-    │ Phase 3: Retract     → Lift and clear away                    │
-    └────────────────────────────────────────────────────────────────┘
-
-    Push Geometry:
-
-        pre_push ----3cm----> contact ----5cm----> post_push
-            ^                    ^                     ^
-            |                    |                     |
-      Start position      Make contact here        End position
-
-    Total linear motion: 3cm (approach) + 5cm (push) = 8cm
-
-    Action Parameterization:
-    - α_x, α_y ∈ [-1, 1] → contact offset ∈ [-2.5cm, +2.5cm]
-    - α_θ ∈ [-1, 1] → push angle ∈ [-π, π] radians
-
-    Push Direction Encoding:
-    The agent outputs α_θ which maps to push direction:
-    - α_θ =  0.0 → angle =  0°    → push in +X (east)
-    - α_θ = +0.5 → angle = +90°   → push in +Y (north)
-    - α_θ = +1.0 → angle = +180°  → push in -X (west)
-    - α_θ = -0.5 → angle = -90°   → push in -Y (south)
-    - α_θ = -1.0 → angle = -180°  → push in -X (west, same as +1.0)
-
-    Why Push Instead of Grasp?
-    Pushing is preferred when:
-    1. Object is spherical (hard to grasp due to rolling)
-    2. Object is occluded (push blockers aside first)
-    3. Object needs repositioning (push toward goal)
-    4. Grasp would be unstable (awkward object orientation)
-
-    Success Criteria:
-    Returns True if push sequence completes (all 3 phases).
-    Note: This doesn't verify object actually moved - that's checked in reward.
-
-    Failure Modes:
-    1. Object position query fails
-    2. Can't reach pre-push position (IK failure, collision)
-    3. Push motion incomplete (collision, workspace limit)
-    4. Exception during execution
-
-    Args:
-        sim: PyBullet simulation instance
-        robot: Panda robot instance
-        target_object: Name of object to push (e.g., "object_2")
-        alpha_x: Contact X-offset in object's local frame, ∈ [-1, 1]
-        alpha_y: Contact Y-offset in object's local frame, ∈ [-1, 1]
-        alpha_theta: Push direction angle, ∈ [-1, 1] → [-π, π]
-        push_distance: How far to push in meters (default: 5cm)
-                      Fixed value simplifies learning
-        push_height: Height of push contact point (default: 3cm)
-                    Lower = more stable, higher = more force transfer
-        use_object_frame: If True, rotate push direction by object orientation
-                         Currently False (world frame pushing)
-
-    Returns:
-        success: True if push sequence completed
-                False if any phase failed
-
-    Design Notes:
-    - **use_object_frame=False**: Push direction in world frame (simpler)
-      Example: α_θ=0 always pushes eastward regardless of object rotation
-
-    - **use_object_frame=True**: Push direction relative to object
-      Example: α_θ=0 pushes in object's "forward" direction
-      More complex but useful for oriented objects
-
-    - **Fixed push_distance**: Agent doesn't control how far to push
-      Simplifies action space but limits flexibility
-
-    - **Fixed push_height**: Always pushes at 3cm height
-      Works for uniform 4cm objects but may fail for different sizes
-
-    Limitations:
-    1. **No force control**: Uses position control, not force control
-       May fail if object is too heavy or friction is high
-
-    2. **No contact verification**: Doesn't check if contact was made
-       Could "air push" if object moved before contact
-
-    3. **No obstacle avoidance**: Direct line motion may collide
-       with table or other objects
-
-    Usage in Environment:
-        Called from step() when action_type == "push":
-        success = execute_push(
-            self.sim, self.robot, self.current_target,
-            alpha_x, alpha_y, alpha_theta
-        )
-        self.action_was_successful = success
+    (函数顶部的详细注释保持不变)
+    ...
     """
     # ========================================================================
     # PHASE 0: SETUP - Query object state
@@ -694,115 +539,66 @@ def execute_push(sim, robot, target_object: str,
         return False
 
     # ========================================================================
-    # CONTACT POINT CALCULATION
+    # CONTACT POINT and PUSH DIRECTION CALCULATION
     # ========================================================================
-    # Convert agent's normalized parameters to physical offsets
-    offset_scale = 0.025  # 2.5cm max offset
-
-    contact_offset = np.array([
-        alpha_x * offset_scale,
-        alpha_y * offset_scale,
-        0.0  # No Z offset (push horizontally)
-    ])
-
+    offset_scale = 0.025
+    contact_offset = np.array([alpha_x * offset_scale, alpha_y * offset_scale, 0.0])
     rot_matrix = quaternion_to_rotation_matrix(obj_ori)
     contact_offset_world = rot_matrix @ contact_offset
-
-    # Contact point in world coordinates
     contact_point = obj_pos + contact_offset_world
-    contact_point[2] = push_height  # Set push height (3cm above table)
+    contact_point[2] = push_height
 
-    # ========================================================================
-    # PUSH DIRECTION CALCULATION
-    # ========================================================================
-    # Convert normalized angle parameter to radians
-    # Mapping: α_θ ∈ [-1, 1] → angle ∈ [-π, π]
     push_angle = alpha_theta * np.pi
-
-    # Convert angle to unit direction vector
-    # Uses standard trigonometry: angle → (cos, sin)
-    push_direction = np.array([
-        np.cos(push_angle),  # X component
-        np.sin(push_angle),  # Y component
-        0.0                  # Z component (horizontal push)
-    ])
-
+    push_direction = np.array([np.cos(push_angle), np.sin(push_angle), 0.0])
     if use_object_frame:
         push_direction = rot_matrix @ push_direction
 
     # ========================================================================
-    # PRE-PUSH POSITION CALCULATION
+    # CALCULATE PUSH TRAJECTORY POINTS
     # ========================================================================
-    # Start 3cm behind contact point along push direction
-    # This ensures robot makes solid contact before applying force
-    pre_push_offset = 0.03  # 3cm approach distance
+    pre_push_offset = 0.03
     pre_push_pos = contact_point - push_direction * pre_push_offset
+    post_push_pos = contact_point + push_direction * push_distance
 
+    # ========================================================================
+    # Clip the trajectory points to stay within workspace bounds
+    # ========================================================================
+    pre_push_pos[0] = np.clip(pre_push_pos[0], workspace_bounds[0], workspace_bounds[1])
+    pre_push_pos[1] = np.clip(pre_push_pos[1], workspace_bounds[2], workspace_bounds[3])
+
+    post_push_pos[0] = np.clip(post_push_pos[0], workspace_bounds[0], workspace_bounds[1])
+    post_push_pos[1] = np.clip(post_push_pos[1], workspace_bounds[2], workspace_bounds[3])
+    # ========================================================================
+    if compute_inverse_kinematics(sim, robot, pre_push_pos) is None:
+        print(f"  ❌ Pre-push position is unreachable. Aborting push.")
+        return False
     # ========================================================================
     # PHASE 1: MOVE TO PRE-PUSH POSITION
     # ========================================================================
-    # Position gripper behind where we want to make contact
     print(f"  Phase 1: Moving to pre-push position...")
-
-    success = move_to_position(
-        sim, robot, pre_push_pos,
-        gripper_open=False, # Gripper closed for pushing
-        steps=150, 
-        sleep_sec=SLOW # Allow time to reach position
-    )
-
+    success = move_to_position(sim, robot, pre_push_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
     if not success:
         print(f"  ❌ Failed to reach pre-push position for {target_object}")
-        return False  # Can't push if can't reach start
+        return False
 
     # ========================================================================
     # PHASE 2: EXECUTE PUSH (Linear Motion)
     # ========================================================================
-    # Move gripper forward through object's position
-    # This is where the actual pushing force is applied
     print(f"  Phase 2: Executing push...")
-
-    # Calculate end position: 5cm forward from contact point
-    post_push_pos = contact_point + push_direction * push_distance
-
-    # Execute linear push motion
-    # Note: This is position control, not force control
-    # Robot will try to reach post_push_pos regardless of resistance
-    success = move_to_position(
-        sim, robot, post_push_pos,
-        gripper_open=False, # Gripper closed
-        steps=150, 
-        sleep_sec=SLOW # Slower motion for controlled push
-    )
-
+    success = move_to_position(sim, robot, post_push_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
     if not success:
         print(f"  ⚠ Push may have been incomplete")
-        # Don't return False - partial push may still be useful
-        # Reward function will determine if object actually moved
 
     # ========================================================================
     # PHASE 3: RETRACT
     # ========================================================================
-    # Move gripper up and away from object
-    # Prevents lingering contact that might push object further
     print(f"  Phase 3: Retracting...")
-
     retract_pos = post_push_pos.copy()
-    retract_pos[2] += 0.1  # Lift 10cm (clear separation)
+    retract_pos[2] += 0.1
+    move_to_position(sim, robot, retract_pos, gripper_open=True, steps=150, sleep_sec=SLOW)
 
-    move_to_position(
-        sim, robot, retract_pos,
-        gripper_open=True, # Open gripper after push
-        steps=150, 
-        sleep_sec=SLOW
-    )
-
-    # ========================================================================
-    # SUCCESS - Push sequence completed
-    # ========================================================================
     print(f"  ✓ Push complete!")
     return True
-
 
 def move_to_position(sim, robot, target_pos: np.ndarray,
                     gripper_open: bool = True,
@@ -829,7 +625,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
     │   5. sim.step()                                                │
     │   6. If error < 1cm: SUCCESS (early exit)                     │
     │ End loop                                                       │
-    │ Final check: If error < 5cm: SUCCESS, else: FAILURE          │
+    │ Final check: If error < 0.015cm: SUCCESS, else: FAILURE          │
     └────────────────────────────────────────────────────────────────┘
 
     Action Space Assumption:
@@ -880,7 +676,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
         try:
             current_pos = get_ee_position_safe(robot)
             error = target_pos - current_pos
-            delta = np.clip(error * 50.0, -1.0, 1.0)
+            delta = np.clip(error * 25.0, -1.0, 1.0)
             action = np.concatenate([delta, [gripper_ctrl]])
 
             if step % 10 == 0:
@@ -890,7 +686,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
             robot.set_action(action)
             sim.step()
 
-            if sleep_sec: 
+            if sleep_sec:
                 import time; time.sleep(sleep_sec)
 
 
@@ -904,7 +700,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
 
     final_pos = get_ee_position_safe(robot)
     final_error = np.linalg.norm(target_pos - final_pos)
-    success = final_error < 0.05
+    success = final_error < 0.015
 
     print(f"  Final: pos={np.round(final_pos, 3)}, error={final_error:.4f}m")
     if not success:
@@ -1310,8 +1106,8 @@ def _find_finger_joint_ids(sim):
 
 def set_gripper_width(sim, width_m: float, force: float = 80.0):
     """
-    以“真实开口宽度（两指间距）”来设定夹爪。Panda 极限 ~0.08m。
-    我们把每个指尖的目标位移设为 width/2。
+    Set the gripper based on the "actual opening width (two-finger spacing)". Panda limit ~0.08m.
+We set the target displacement of each fingertip as width/2.
     """
     uid = _get_panda_uid(sim)
     if uid is None:
@@ -1325,7 +1121,7 @@ def set_gripper_width(sim, width_m: float, force: float = 80.0):
         )
 
 def get_gripper_width(sim) -> float:
-    """读取两指开口总宽度（m）。"""
+    """Set the gripper based on the "actual opening width (two-finger spacing)". Panda reads the total width of the two-finger opening at its limit.（m）。"""
     uid = _get_panda_uid(sim)
     if uid is None:
         return 0.0
