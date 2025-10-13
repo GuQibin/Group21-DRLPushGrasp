@@ -17,6 +17,7 @@ import numpy as np
 from typing import Tuple, Optional
 import pybullet as p
 
+SLOW = 1/120
 
 def get_ee_position_safe(robot) -> np.ndarray:
     """
@@ -431,7 +432,8 @@ def execute_pick_and_place(sim, robot, target_object: str,
     success = move_to_position(
         sim, robot, approach_pos,
         gripper_open=True,  # Keep gripper open during approach
-        steps=50            # Allow 50 timesteps for convergence
+        steps=150, 
+        sleep_sec=SLOW           # Allow 50 timesteps for convergence
     )
 
     if not success:
@@ -451,7 +453,8 @@ def execute_pick_and_place(sim, robot, target_object: str,
     success = move_to_position(
         sim, robot, grasp_pos,
         gripper_open=True,
-        steps=30  # Fewer steps = slower, more controlled descent
+        steps=150, 
+        sleep_sec=SLOW# Fewer steps = slower, more controlled descent
     )
 
     if not success:
@@ -461,40 +464,46 @@ def execute_pick_and_place(sim, robot, target_object: str,
     # ========================================================================
     # PHASE 3: CLOSE GRIPPER
     # ========================================================================
-    # Actuate gripper fingers to close around object
     print(f"  Phase 3: Closing gripper...")
-
-    close_gripper(sim, robot, steps=20)
-
-    # ========================================================================
-    # PHASE 4: VERIFY GRASP SUCCESS
-    # ========================================================================
-    # Critical checkpoint: Did we actually grasp the object?
-    # Prevents wasting time transporting empty gripper
-    print(f"  Phase 4: Checking grasp...")
-
-    if not check_grasp_success(sim, robot, target_object, initial_z=initial_obj_z):
-        print(f"  ❌ Grasp failed for {target_object}")
-        open_gripper(sim, robot, steps=10)
-        return False  # Early exit - no point continuing without object
-
-    print(f"  ✓ Successfully grasped {target_object}")
+    close_gripper(sim, robot, steps=60, sleep_sec=SLOW)
+    # 给接触求解一点时间
+    for _ in range(30):
+        sim.step()
 
     # ========================================================================
-    # PHASE 5: LIFT OBJECT
+    # PHASE 4: MICRO-LIFT to validate grasp  ← 关键改动
     # ========================================================================
-    # Raise grasped object to safe transport height
-    # Same height as approach to clear any obstacles
+    print(f"  Phase 4: Micro-lift to check grasp...")
+    # 记录关爪后的物体高度
+    try:
+        obj_z_before = sim.get_base_position(target_object)[2]
+    except Exception:
+        obj_z_before = initial_obj_z
+
+    # 微抬 3cm
+    micro_lift = get_ee_position_safe(robot).copy()
+    micro_lift[2] += 0.03
+    move_to_position(sim, robot, micro_lift, gripper_open=False, steps=60, sleep_sec=SLOW)
+
+    # 等几帧稳定
+    for _ in range(20):
+        sim.step()
+
+    obj_z_after = sim.get_base_position(target_object)[2]
+    lift_gain = obj_z_after - obj_z_before
+    if lift_gain < 0.01:
+        print(f"  ❌ Grasp failed (lift gain={lift_gain:.3f}m)")
+        open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
+        return False
+    print(f"  ✓ Successfully grasped {target_object} (lift gain={lift_gain:.3f}m)")
+
+    # ========================================================================
+    # PHASE 5: LIFT OBJECT to transport height
+    # ========================================================================
     print(f"  Phase 5: Lifting object...")
-
-    lift_pos = get_ee_position_safe(robot) # Use current EE pos as start
-    lift_pos[2] = approach_height  # Lift back to 15cm
-
-    move_to_position(
-        sim, robot, lift_pos,
-        gripper_open=False,  # Keep gripper CLOSED to hold object
-        steps=30
-    )
+    lift_pos = get_ee_position_safe(robot)
+    lift_pos[2] = approach_height
+    move_to_position(sim, robot, lift_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
 
     # ========================================================================
     # PHASE 6: TRANSPORT TO GOAL
@@ -512,7 +521,8 @@ def execute_pick_and_place(sim, robot, target_object: str,
     move_to_position(
         sim, robot, transport_pos,
         gripper_open=False,  # Still holding object
-        steps=50  # Allow more time for potentially longer distance
+        steps=150, 
+        sleep_sec=SLOW# Allow more time for potentially longer distance
     )
 
     # ========================================================================
@@ -530,11 +540,12 @@ def execute_pick_and_place(sim, robot, target_object: str,
     move_to_position(
         sim, robot, place_pos,
         gripper_open=False,  # Still closed during descent
-        steps=30
+        steps=150, 
+        sleep_sec=SLOW
     )
 
     # Release object
-    open_gripper(sim, robot, steps=20)
+    open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
 
     # ========================================================================
     # PHASE 8: RETRACT
@@ -549,7 +560,8 @@ def execute_pick_and_place(sim, robot, target_object: str,
     move_to_position(
         sim, robot, retract_pos,
         gripper_open=True,  # Open gripper during retract
-        steps=30
+        steps=150, 
+        sleep_sec=SLOW
     )
 
     # ========================================================================
@@ -735,7 +747,8 @@ def execute_push(sim, robot, target_object: str,
     success = move_to_position(
         sim, robot, pre_push_pos,
         gripper_open=False, # Gripper closed for pushing
-        steps=40            # Allow time to reach position
+        steps=150, 
+        sleep_sec=SLOW # Allow time to reach position
     )
 
     if not success:
@@ -758,7 +771,8 @@ def execute_push(sim, robot, target_object: str,
     success = move_to_position(
         sim, robot, post_push_pos,
         gripper_open=False, # Gripper closed
-        steps=30  # Slower motion for controlled push
+        steps=150, 
+        sleep_sec=SLOW # Slower motion for controlled push
     )
 
     if not success:
@@ -779,7 +793,8 @@ def execute_push(sim, robot, target_object: str,
     move_to_position(
         sim, robot, retract_pos,
         gripper_open=True, # Open gripper after push
-        steps=20
+        steps=150, 
+        sleep_sec=SLOW
     )
 
     # ========================================================================
@@ -791,7 +806,8 @@ def execute_push(sim, robot, target_object: str,
 
 def move_to_position(sim, robot, target_pos: np.ndarray,
                     gripper_open: bool = True,
-                    steps: int = 50) -> bool:
+                    steps: int = 50,
+                    sleep_sec: float = 0.0) -> bool:
     """
     Move end-effector to target position using robot's action interface.
 
@@ -874,6 +890,10 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
             robot.set_action(action)
             sim.step()
 
+            if sleep_sec: 
+                import time; time.sleep(sleep_sec)
+
+
             if np.linalg.norm(error) < 0.01:
                 print(f"  ✓ Reached target at step {step}")
                 return True
@@ -893,37 +913,43 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
     return success
 
 
-def open_gripper(sim, robot, steps: int = 30):
-    """
-    Open gripper using a standard control command.
-    """
-    print("  [GRIPPER] Attempting to open...")
+
+def open_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
+    """把夹爪打开到 7cm，并推进若干步让物理稳定。"""
+    import time
+    target = 0.07  # 7cm
+    set_gripper_width(sim, target)
     for _ in range(steps):
-        robot.set_action(np.array([0.0, 0.0, 0.0, 1.0]))
         sim.step()
+        if sleep_sec: time.sleep(sleep_sec)
+    w = get_gripper_width(sim)
+    print(f"  ✓ Gripper opened to ~{w:.3f}m")
 
-    state = get_gripper_state(robot)
-    if state['is_open']:
-        print("  ✓ Gripper opened")
-    else:
-        print(f"  ⚠ Gripper may not be fully open. Current width: {state['width']:.3f}m")
-
-
-def close_gripper(sim, robot, steps: int = 30):
-    """
-    Close gripper using a standard control command.
-    """
-    print("  [GRIPPER] Attempting to close...")
+def close_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
+    """把夹爪闭合到 0cm（靠摩擦夹持），推进若干步沉降。"""
+    import time
+    set_gripper_width(sim, 0.0)
     for _ in range(steps):
-        robot.set_action(np.array([0.0, 0.0, 0.0, -1.0]))
         sim.step()
+        if sleep_sec: time.sleep(sleep_sec)
+    w = get_gripper_width(sim)
+    print(f"  ✓ Gripper closed width ~{w:.3f}m")
 
-    state = get_gripper_state(robot)
-    if state['is_closed']:
-        print("  ✓ Gripper closed")
-    else:
-        print(f"  ⚠ Gripper may not be fully closed. Current width: {state['width']:.3f}m")
-
+def get_gripper_state(robot) -> dict:
+    """
+    现在不再从 robot.get_obs() 猜索引，而是直接读关节。
+    """
+    w = 0.0
+    try:
+        # robot 里有 sim；直接读取
+        w = get_gripper_width(robot.sim)
+    except Exception:
+        pass
+    return {
+        "width": w,
+        "is_closed": w < 0.01,
+        "is_open":   w > 0.07
+    }
 
 def check_grasp_success(sim, robot, object_name: str,
                        initial_z: Optional[float] = None,
@@ -1234,11 +1260,11 @@ def diagnose_robot_control(robot, sim, steps: int = 10):
     gripper_state_initial = get_gripper_state(robot)
     print(f"Initial gripper: {gripper_state_initial}")
 
-    open_gripper(sim, robot, steps=20)
+    open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
     gripper_state_open = get_gripper_state(robot)
     print(f"After open command: {gripper_state_open}")
 
-    close_gripper(sim, robot, steps=20)
+    close_gripper(sim, robot, steps=60, sleep_sec=SLOW)
     gripper_state_closed = get_gripper_state(robot)
     print(f"After close command (-1.0): {gripper_state_closed}")
 
@@ -1260,3 +1286,52 @@ def diagnose_robot_control(robot, sim, steps: int = 10):
         print(f"  → Closed state: {gripper_state_closed}")
 
     print("="*60 + "\n")
+
+
+
+# --- add: finger joint helpers (works with panda_gym.Panda) ---
+def _get_panda_uid(sim):
+    return sim._bodies_idx.get("panda")
+
+def _find_finger_joint_ids(sim):
+    """Auto-detect 2 finger joints by name containing 'finger_joint'."""
+    uid = _get_panda_uid(sim)
+    if uid is None:
+        return []
+    ids = []
+    n = sim.physics_client.getNumJoints(uid)
+    for j in range(n):
+        jname = sim.physics_client.getJointInfo(uid, j)[1].decode()
+        if "finger_joint" in jname:
+            ids.append(j)
+    # 排序并只取前两个
+    ids = sorted(ids)[:2]
+    return ids
+
+def set_gripper_width(sim, width_m: float, force: float = 80.0):
+    """
+    以“真实开口宽度（两指间距）”来设定夹爪。Panda 极限 ~0.08m。
+    我们把每个指尖的目标位移设为 width/2。
+    """
+    uid = _get_panda_uid(sim)
+    if uid is None:
+        return
+    fids = _find_finger_joint_ids(sim)
+    half = max(0.0, float(width_m) * 0.5)
+    for jid in fids:
+        sim.physics_client.setJointMotorControl2(
+            uid, jid, controlMode=p.POSITION_CONTROL,
+            targetPosition=half, force=force
+        )
+
+def get_gripper_width(sim) -> float:
+    """读取两指开口总宽度（m）。"""
+    uid = _get_panda_uid(sim)
+    if uid is None:
+        return 0.0
+    fids = _find_finger_joint_ids(sim)
+    width = 0.0
+    for jid in fids:
+        js = sim.physics_client.getJointState(uid, jid)
+        width += float(js[0])  # position
+    return width
