@@ -22,12 +22,3 @@ python -m scripts.test_robot_util
 python -m scripts.test_state_action
 
 
-ZHANG TODO:
-1. Export a conda env yaml
-2. Modify the robot excution strategy
-
-GU TODO:
-1. 修改初始化的物体种类限定
-
-CONG TODO:
-1. 给每个函数加注释
