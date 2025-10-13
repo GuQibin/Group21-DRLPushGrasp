@@ -35,18 +35,19 @@ conda activate me5418
 🚀 Run Tests
 
 You can verify individual components or run quick environment tests:
-# Quick initialization test
-python -m scripts.minimal_test
 
-# Validate reward logic
-python -m scripts.test_complete_reward
+
+
 
 # Test full environment loop
 python -m scripts.test_custom_env
 
-# Single-step debug test
+# Single-step initialization test
 python -m scripts.test_env_once
 
+
+# Validate reward logic
+python -m scripts.test_complete_reward
 # Utility and physics validation
 python -m scripts.test_objects_util
 python -m scripts.test_physics_util
