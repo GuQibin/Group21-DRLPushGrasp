@@ -72,7 +72,7 @@ class StrategicPushAndGraspEnv(gym.Env):
     # ENVIRONMENT PARAMETERS
     # ========================================================================
     MAX_OBJECTS = 10 # Maximum objects for padding observation space
-    WORKSPACE_BOUNDS = (-0.3, 0.3, -0.3, 0.3)  # (x_min, x_max, y_min, y_max) in meters
+    WORKSPACE_BOUNDS = (-0.25, 0.25, -0.25, 0.25)  # (x_min, x_max, y_min, y_max) in meters
     OCCLUSION_THRESHOLD = 0.05  # 5cm - objects closer than this may occlude each other
     MIN_OBJECT_SEPARATION = 0.08  # 8cm - minimum distance between spawned objects
 
@@ -100,9 +100,9 @@ class StrategicPushAndGraspEnv(gym.Env):
         # PyBullet simulation with optional GUI rendering
 
         self.sim = PyBullet(render_mode=render_mode)
-        base_pos = np.array([0.4, -0.3, 0.0])
+        base_pos = np.array([-0.5, 0.0, 0.0])
         # Panda robot: 7-DOF arm + parallel-jaw gripper
-        # Base positioned at [0.4, -0.3, 0.0] to reach table corner
+        # Base positioned at [0.4, 0.0, 0.0] to reach table corner
         # block_gripper=False allows continuous gripper control
         self.robot = Panda(
             self.sim,
@@ -538,153 +538,7 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         return obs
 
-    # def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
-    #     """
-    #     Reset the environment to an initial state for a new episode.
 
-    #     This method will:
-    #     1. Clear objects from the previous episode.
-    #     2. Create a new random scene with 5-10 objects, using a new strategy:
-    #        - Guarantees at least one cube and one sphere.
-    #        - Deterministically creates an occlusion by spawning a special pair of objects,
-    #          ensuring a valid strategic challenge in every scene.
-    #     3. Analyze occlusions and update the visual colors of objects.
-    #     4. Select an initial target using the nearest-to-goal heuristic.
-    #     5. Reset all tracking variables for reward computation.
-
-    #     Args:
-    #         seed: Random seed for reproducibility.
-    #         options: Additional reset options (unused).
-
-    #     Returns:
-    #         observation: The complete 348D state vector.
-    #         info: An empty dictionary (as required by the Gymnasium API).
-    #     """
-    #     super().reset(seed=seed)
-
-    #     # ====================================================================
-    #     # DISABLE RENDERING DURING SETUP - Significant speedup for training
-    #     # ====================================================================
-    #     with self.sim.no_rendering():
-    #         # ================================================================
-    #         # 1. CREATE STATIC SCENE (ONE-TIME SETUP)
-    #         # ================================================================
-    #         if not self.scene_setup:
-    #             self.sim.create_box(
-    #                 body_name="table",
-    #                 half_extents=np.array([0.4, 0.4, 0.01]),
-    #                 mass=0.0,
-    #                 position=np.array([0, 0, -0.01]),
-    #                 rgba_color=np.array([0.8, 0.8, 0.8, 1])
-    #             )
-    #             self.scene_setup = True
-
-    #         # ================================================================
-    #         # 2. CLEAN UP PREVIOUS EPISODE's OBJECTS
-    #         # ================================================================
-    #         for body_name in list(self.objects.keys()):
-    #             body_id = self.sim._bodies_idx.get(body_name)
-    #             if body_id is not None:
-    #                 self.sim.physics_client.removeBody(body_id)
-    #         self.objects.clear()
-    #         self.collected_objects.clear()
-
-    #         # ================================================================
-    #         # 3. RESET REWARD TRACKING VARIABLES
-    #         # ================================================================
-    #         self.previous_joint_positions = None
-    #         self.previous_object_distances.clear()
-    #         self.previous_occlusion_states.clear()
-
-    #         # ================================================================
-    #         # 4. VISUALIZE GOAL ZONE
-    #         # ================================================================
-    #         self._draw_goal_square()
-
-    #         # ================================================================
-    #         # 5. RESET ROBOT TO HOME POSITION
-    #         # ================================================================
-    #         self.robot.reset()
-
-    #         # ================================================================
-    #         # 6. SPAWN RANDOM OBJECTS (New deterministic occlusion strategy)
-    #         # ================================================================
-    #         num_objects = np.random.randint(5, self.MAX_OBJECTS + 1)
-
-    #         # Prepare a list of object types, ensuring at least one cube and one sphere
-    #         types_to_spawn = ["cube", "sphere"]
-    #         for _ in range(num_objects - 2):
-    #             types_to_spawn.append(np.random.choice(["cube", "sphere"]))
-    #         random.shuffle(types_to_spawn)
-
-    #         # --- [DETERMINISTIC OCCLUSION STRATEGY START] ---
-    #         # First, spawn the "occluded" object and the "occluder" object
-    #         # to guarantee an occlusion scenario.
-
-    #         # 1. Spawn the object that WILL BE occluded.
-    #         occluded_type = types_to_spawn.pop(0)
-    #         occluded_name = f"object_{len(self.objects)}"
-    #         pos_occluded = get_safe_spawn_position(
-    #             self.sim, list(self.objects.keys()), self.goal_pos, self.goal_size,
-    #             min_separation=self.MIN_OBJECT_SEPARATION, workspace_bounds=self.WORKSPACE_BOUNDS
-    #         )
-    #         self._spawn_object(occluded_name, occluded_type, pos_occluded)
-
-    #         # 2. Spawn the "occluder" object between the first object and the goal.
-    #         occluder_type = types_to_spawn.pop(0)
-    #         occluder_name = f"object_{len(self.objects)}"
-
-    #         # Calculate the occluder's position
-    #         vec_to_goal = self.goal_pos - pos_occluded[:2]
-    #         unit_vec_to_goal = vec_to_goal / (np.linalg.norm(vec_to_goal) + 1e-6)
-
-    #         # Place it slightly towards the goal from the occluded object
-    #         # This distance MUST be less than OCCLUSION_THRESHOLD (0.05) to be detected
-    #         distance_offset = 0.045
-    #         pos_occluder_xy = pos_occluded[:2] + unit_vec_to_goal * distance_offset
-    #         pos_occluder = np.array([pos_occluder_xy[0], pos_occluder_xy[1], pos_occluded[2]])
-
-    #         self._spawn_object(occluder_name, occluder_type, pos_occluder)
-
-    #         # 3. Spawn the rest of the objects randomly.
-    #         for object_type in types_to_spawn:
-    #             body_name = f"object_{len(self.objects)}"
-    #             spawn_pos = get_safe_spawn_position(
-    #                 self.sim, list(self.objects.keys()), self.goal_pos, self.goal_size,
-    #                 min_separation=self.MIN_OBJECT_SEPARATION, workspace_bounds=self.WORKSPACE_BOUNDS
-    #             )
-    #             self._spawn_object(body_name, object_type, spawn_pos)
-
-    #         # --- [DETERMINISTIC OCCLUSION STRATEGY END] ---
-
-    #         # ================================================================
-    #         # 7. ANALYZE SCENE AND UPDATE VISUALS
-    #         # ================================================================
-    #         # This will now be guaranteed to find at least one occlusion.
-    #         analyze_scene_occlusions(self.sim, self.objects, self.OCCLUSION_THRESHOLD)
-
-    #         for name in self.objects:
-    #             self.previous_occlusion_states[name] = self.objects[name]["is_occluded"]
-
-    #         update_object_colors(
-    #             self.sim, self.objects,
-    #             self.COLOR_GREEN, self.COLOR_YELLOW, self.COLOR_RED
-    #         )
-
-    #         # ================================================================
-    #         # 8. SELECT INITIAL TARGET (HEURISTIC)
-    #         # ================================================================
-    #         self.current_target = select_target_heuristic(
-    #             self.sim, self.objects, self.goal_pos, self.collected_objects
-    #         )
-
-    #     # ====================================================================
-    #     # INITIALIZE JOINT TRACKING (AFTER RENDERING IS RE-ENABLED)
-    #     # ====================================================================
-    #     self.previous_joint_positions = self.robot.get_obs()[:7]
-    #     self.episode_step = 0
-
-    #     return self._get_obs(), {}
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """
@@ -728,28 +582,26 @@ class StrategicPushAndGraspEnv(gym.Env):
             self.robot.reset()
 
             # ===================== SINGLE-CUBE DEMO BRANCH ======================
-            # ================================================================
-            # 单物体 Demo 分支（通过 reset(options=...) 触发）
-            # ================================================================
+
             if options and options.get("single_object_demo", False):
-                # 先清掉所有旧的 debug 线，避免出现“两个目标框”
+                # First, remove all the old debug lines to avoid the occurrence of "two target boxes".
                 self.sim.physics_client.removeAllUserDebugItems()
 
-                # 读取/设置目标区
+                # Read/Write Target Area
                 if "goal_pos" in options:
                     self.goal_pos = np.array(options["goal_pos"], dtype=np.float32)
                 if "goal_size" in options:
                     self.goal_size = float(options["goal_size"])
 
-                # 画一次（且只画一次）目标框
+                # Draw the target box once (and only once)
                 self._draw_goal_square()
 
-                # 读取要生成的物体类型与位置（默认：一个 4cm 方体）
+                # Read the type and position of the object to be generated (default: a 4cm cube)
                 obj_type = options.get("object_type", "cube")  # "cube" 或 "sphere"
                 if obj_type not in ("cube", "sphere"):
                     obj_type = "cube"
 
-                # 平面位置
+                # planimetric position
                 obj_xy = np.array(options.get("object_pos", [0.45, 0.00]), dtype=np.float32)
 
                 if obj_type == "cube":
@@ -761,20 +613,20 @@ class StrategicPushAndGraspEnv(gym.Env):
                     spawn_pos = np.array([obj_xy[0], obj_xy[1], radius], dtype=np.float32)
                     self._spawn_object("object_0", "sphere", spawn_pos)
 
-                # 分析遮挡并着色（虽然只有一个物体，但保持一致性）
+                # Analyze occlusion and apply coloring (although there is only one object, maintain consistency)
                 analyze_scene_occlusions(self.sim, self.objects, self.OCCLUSION_THRESHOLD)
                 for name in self.objects:
                     self.previous_occlusion_states[name] = self.objects[name]["is_occluded"]
                 update_object_colors(self.sim, self.objects, self.COLOR_GREEN, self.COLOR_YELLOW, self.COLOR_RED)
 
-                # 选一个目标（就一个物体）
+                # Choose a target (just one object)
                 self.current_target = select_target_heuristic(self.sim, self.objects, self.goal_pos, self.collected_objects)
 
-                # 初始化轨迹与步数
+                # Initialization of trajectory and number of steps
                 self.previous_joint_positions = self.robot.get_obs()[:7]
                 self.episode_step = 0
 
-                # 可选：把相机拉开一点，方便观察
+                #Optional: Pull the camera back a little to make it easier to observe.
                 try:
                     self.sim.physics_client.resetDebugVisualizerCamera(
                         cameraDistance=1.2, cameraYaw=45, cameraPitch=-35, cameraTargetPosition=[0,0,0]
@@ -785,7 +637,6 @@ class StrategicPushAndGraspEnv(gym.Env):
                 return self._get_obs(), {}
             # =================== END SINGLE-CUBE DEMO BRANCH =====================
 
-            # ----------------- 原有：随机多物体 + 保证遮挡 -----------------
             num_objects = np.random.randint(5, self.MAX_OBJECTS + 1)
 
             types_to_spawn = ["cube", "sphere"]
@@ -947,30 +798,26 @@ class StrategicPushAndGraspEnv(gym.Env):
             print(f"⚠ No target selected - action failed")
         elif action_type == "grasp":
             print(f"\nExecuting PICK-AND-PLACE on {self.current_target}")
-            # self.action_was_successful = execute_pick_and_place(
-            #     self.sim, self.robot, self.current_target, alpha_x, alpha_y, self.goal_pos)
-
-            # === 1) 用 AABB 估计物体高度 & 中间层 ===
-            body_id = self.sim._bodies_idx.get(self.current_target)
-            aabb_min, aabb_max = p.getAABB(body_id)
-            bottom_z = aabb_min[2]
-            top_z    = aabb_max[2]
-            height   = max(1e-3, top_z - bottom_z)  # 防 NaN/0
-            grasp_z  = bottom_z + 0.5 * height      # 在物体中间夹侧面
-            approach_z = top_z + 0.10               # 顶面上方 10cm 冲突更少
-
-            # === 2) 调用抓取 primitive，覆盖默认高度 ===
             self.action_was_successful = execute_pick_and_place(
-                self.sim, self.robot, self.current_target,
-                alpha_x, alpha_y, self.goal_pos,
-                approach_height=approach_z,     # 比顶面高 10cm
-                grasp_height=grasp_z            # 物体中间高度
+                self.sim,
+                self.robot,
+                self.current_target,
+                alpha_x,
+                alpha_y,
+                self.goal_pos,
+                workspace_bounds=self.WORKSPACE_BOUNDS
             )
-            
         elif action_type == "push":
             print(f"\nExecuting PUSH on {self.current_target}")
             self.action_was_successful = execute_push(
-                self.sim, self.robot, self.current_target, alpha_x, alpha_y, alpha_theta)
+                self.sim,
+                self.robot,
+                self.current_target,
+                alpha_x,
+                alpha_y,
+                alpha_theta,
+                workspace_bounds=self.WORKSPACE_BOUNDS
+            )
 
         # ====================================================================
         # 3. CHECK FOR AND REMOVE COLLECTED OBJECTS
@@ -1014,7 +861,6 @@ class StrategicPushAndGraspEnv(gym.Env):
         # ====================================================================
         # 10. CHECK TERMINATION CONDITIONS
         # ====================================================================
-        # The total number of objects is the sum of those remaining and those collected.
         total_objects_at_start = len(self.objects) + len(self.collected_objects)
         terminated = False
         if total_objects_at_start > 0:
