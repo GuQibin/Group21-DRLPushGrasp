@@ -12,7 +12,7 @@ It builds upon a custom PyBullet simulation environment with high-level task abs
 ---
 
 ## 📁 Directory Structure  
-
+```text
 Group21-DRLPushGrasp/
 ├── environment.yaml # Conda env spec (Python 3.8 + pip pkgs)
 ├── LICENSE
@@ -27,7 +27,7 @@ Group21-DRLPushGrasp/
 ├── object_util.py # Object spawning / utilities
 ├── physics_util.py # Physics helpers (e.g., step/settle)
 ├── robot_util.py # Robot (gripper/arm) helper functions
-
+```
 
 
 ## ⚙️ Environment Setup
@@ -35,40 +35,42 @@ Group21-DRLPushGrasp/
 ### Create Conda Environment
 If you already have the `environment.yaml` file:
 
-
+```Bash
 # Create the Conda environment from the spec (installs Python 3.8 + pip pkgs)
 conda env create -f environment.yaml
 
 # Activate the environment (make sure the name matches the 'name:' in YAML)
 conda activate me5418
+```
 
 ---
 
 ### 🚀 Run Demo
 
-
+```Bash
 # Run the full environment loop to verify environment registration & stepping
 python -m scripts.test_custom_env
+```
 
 ---
 
 ## 🧠 Object Utilities (`utils/object_util.py`)
-
+```text
 This module centralizes **object-level reasoning** for the Strategic Push–Grasp environment:
 shape encoding for NN inputs, pairwise spatial reasoning, occlusion analysis, safe spawning,
 and simple (non-learned) target selection.
-
+```
 ## 🏗️ Physics Utilities (`utils/physics_util.py`)
-
+```text
 Utilities that wrap PyBullet’s low-level API into safer, typed helpers for the Strategic Push–Grasp environment. They cover **workspace bounds, collisions, contact forces, stability checks, ray tests, and visualization**. All functions include conservative error handling to keep training loops robust.
-
+```
 ## 🤖 Robot Utilities (`utils/robot_util.py`)
-
+```text
 High-level **manipulation primitives** (pick–place and push) and robust helpers for
 end-effector (EE) state, inverse kinematics, motion control, gripper control, and diagnostics.
 These wrap various panda-gym/PyBullet details behind a stable API so the RL policy
 can focus on **when** to push vs. grasp—not *how* to drive every joint.
-
+```
 ---
 
 ## ⚙️ Core Action Primitives
