@@ -32,7 +32,7 @@ Group21-DRLPushGrasp/
 
 ## ⚙️ Environment Setup
 
-### 1️⃣ Create Conda Environment
+### Create Conda Environment
 If you already have the `environment.yaml` file:
 
 ```bash
@@ -42,7 +42,6 @@ conda env create -f environment.yaml
 # Activate the environment (make sure the name matches the 'name:' in YAML)
 conda activate me5418
 
-
 ---
 
 ### 🚀 Run Demo
@@ -50,7 +49,6 @@ conda activate me5418
 ```bash
 # Run the full environment loop to verify environment registration & stepping
 python -m scripts.test_custom_env
-
 
 ---
 
