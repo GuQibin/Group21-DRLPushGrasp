@@ -55,22 +55,23 @@ python -m scripts.test_custom_env
 ---
 
 ## 🧠 Object Utilities (`utils/object_util.py`)
-```text
+- **`
 This module centralizes **object-level reasoning** for the Strategic Push–Grasp environment:
 shape encoding for NN inputs, pairwise spatial reasoning, occlusion analysis, safe spawning,
 and simple (non-learned) target selection.
-```
+`**  
 ## 🏗️ Physics Utilities (`utils/physics_util.py`)
-```text
+- **`
 Utilities that wrap PyBullet’s low-level API into safer, typed helpers for the Strategic Push–Grasp environment. They cover **workspace bounds, collisions, contact forces, stability checks, ray tests, and visualization**. All functions include conservative error handling to keep training loops robust.
-```
+`**  
 ## 🤖 Robot Utilities (`utils/robot_util.py`)
-```text
+- **`
 High-level **manipulation primitives** (pick–place and push) and robust helpers for
 end-effector (EE) state, inverse kinematics, motion control, gripper control, and diagnostics.
 These wrap various panda-gym/PyBullet details behind a stable API so the RL policy
 can focus on **when** to push vs. grasp—not *how* to drive every joint.
-```
+`**  
+
 ---
 
 ## ⚙️ Core Action Primitives
