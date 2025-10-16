@@ -11,22 +11,30 @@ It builds upon a custom PyBullet simulation environment with high-level task abs
 
 ---
 
+## 🧪 Test Scenario & Random Baseline
+Each episode samples a diverse set of objects (shape/size/pose/placement randomized), always including red/yellow/green targets. The robot executes a random policy over push/grasp primitives to provide a sanity‐check baseline. We report grasp success, push displacement/goal rate, scene clearance, safety violations, and episodic return.
+
+---
+
 ## 📁 Directory Structure  
 ```text
 Group21-DRLPushGrasp/
-├── environment.yaml # Conda env spec (Python 3.8 + pip pkgs)
+├── environment.yaml                # Conda env spec (Python 3.8 + pip pkgs)
 ├── LICENSE
-├── README.md # This file
-├── requirements.txt # (Optional) pip-style dependency list
+├── README.md                       # This file
+├── requirements.txt                # (Optional) pip-style dependency list
 ├── envs/
-│ ├── init.py # Registers the custom env(s)
-│ └── strategic_env.py # Core environment implementation
+│   ├── init.py                     # Registers the custom env(s)
+│   └── strategic_env.py            # Core environment implementation
 ├── scripts/
-│ └── test_custom_env.py # Simple loop to test the env end-to-end
-└── utils/
-├── object_util.py # Object spawning / utilities
-├── physics_util.py # Physics helpers (e.g., step/settle)
-├── robot_util.py # Robot (gripper/arm) helper functions
+│   ├── test_custom_env.py          # Simple loop to test the env end-to-end
+│   └── random_baseline.py          # Random push/grasp baseline (reproducible with seed)
+├── utils/
+│   ├── object_util.py              # Object spawning / utilities
+│   ├── physics_util.py             # Physics helpers (e.g., step/settle)
+│   └── robot_util.py               # Robot (gripper/arm) helper functions
+└── video/
+    └── demo_presentation.mp4       # Demo sample video for presentation
 ```
 
 
