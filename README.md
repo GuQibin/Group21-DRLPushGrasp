@@ -13,43 +13,77 @@ It builds upon a custom PyBullet simulation environment with high-level task abs
 
 ## 📁 Directory Structure  
 Group21-DRLPushGrasp/
+├── environment.yaml # Conda env spec (Python 3.8 + pip pkgs)
+├── LICENSE
+├── README.md # This file
+├── requirements.txt # (Optional) pip-style dependency list
 ├── envs/
-│   ├── __init__.py          # 使环境可以被注册和发现
-│   └── strategic_env.py     # 我们的核心环境文件
+│ ├── init.py # Registers the custom env(s)
+│ └── strategic_env.py # Core environment implementation
 ├── scripts/
-│   └── test_custom_env.py   # 用于验证我们新环境的脚本
-├── README.md                # 项目说明文件
-└── requirements.txt         # 项目依赖文件
+│ └── test_custom_env.py # Simple loop to test the env end-to-end
+└── utils/
+├── object_util.py # Object spawning / utilities
+├── physics_util.py # Physics helpers (e.g., step/settle)
+├── robot_util.py # Robot (gripper/arm) helper functions
+
 
 ---
 
-## ⚙️ Environment Setup  
+## ⚙️ Environment Setup
 
-### 1️⃣ Create Conda Environment  
-If you already have the `environment.yaml` file:  
+### 1️⃣ Create Conda Environment
+If you already have the `environment.yaml` file:
+
 ```bash
-conda env create -f environment.yaml -n me5418
+# Create the Conda environment from the spec (installs Python 3.8 + pip pkgs)
+conda env create -f environment.yaml
+
+# Activate the environment (make sure the name matches the 'name:' in YAML)
 conda activate me5418
 
+---
 
-🚀 Run Tests
-
-You can verify individual components or run quick environment tests:
-
-
-
-
-# Test full environment loop
+# 🚀 Run Demo
+# Run the full environment loop to verify registration & stepping
 python -m scripts.test_custom_env
 
-# Single-step initialization test
-python -m scripts.test_env_once
 
+give out some comments on this object_util and important functions in it in the README.md
 
-# Validate reward logic
-python -m scripts.test_complete_reward
-# Utility and physics validation
-python -m scripts.test_objects_util
-python -m scripts.test_physics_util
-python -m scripts.test_robot_util
-python -m scripts.test_state_action
+---
+
+## 🧠 Object Utilities (`utils/object_util.py`)
+
+This module centralizes **object-level reasoning** for the Strategic Push–Grasp environment:
+shape encoding for NN inputs, pairwise spatial reasoning, occlusion analysis, safe spawning,
+and simple (non-learned) target selection.
+
+## 🏗️ Physics Utilities (`utils/physics_util.py`)
+
+Utilities that wrap PyBullet’s low-level API into safer, typed helpers for the Strategic Push–Grasp environment. They cover **workspace bounds, collisions, contact forces, stability checks, ray tests, and visualization**. All functions include conservative error handling to keep training loops robust.
+
+## 🤖 Robot Utilities (`utils/robot_util.py`)
+
+High-level **manipulation primitives** (pick–place and push) and robust helpers for
+end-effector (EE) state, inverse kinematics, motion control, gripper control, and diagnostics.
+These wrap various panda-gym/PyBullet details behind a stable API so the RL policy
+can focus on **when** to push vs. grasp—not *how* to drive every joint.
+
+---
+
+### Core Action Primitives
+
+- **`execute_pick_and_place(sim, robot, target_object, alpha_x, alpha_y, goal_pos, workspace_bounds, approach_height=0.15, grasp_height=0.03) -> bool`**  
+  Eight-phase grasp pipeline (approach → descend → close → verify → lift → transport → place → retract).  
+  - **Inputs:** normalized offsets `alpha_x/alpha_y ∈ [-1,1]` mapped to ±2.5 cm around the object center; workspace clipping enforced.  
+  - **Verification:** micro-lift checks object Z-gain (>1 cm) to confirm a *real* grasp.  
+  - **Returns:** `True` only if all phases succeed (prevents false positive rewards).
+
+- **`execute_push(sim, robot, target_object, alpha_x, alpha_y, alpha_theta, workspace_bounds, push_distance=0.05, push_height=0.03, use_object_frame=True) -> bool`**  
+  Contact-point selection + straight-line push along a direction parameterized by `alpha_theta` (mapped to angle).  
+  - Clips pre/post push waypoints into workspace bounds.  
+  - Clean 3-phase routine (pre-push → push → retract).
+
+> Both primitives convert object orientation **quaternion → rotation matrix** and transform offsets
+> into world frame, so they work on rotated objects.

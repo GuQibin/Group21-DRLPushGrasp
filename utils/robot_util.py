@@ -711,7 +711,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
 
 
 def open_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
-    """把夹爪打开到 7cm，并推进若干步让物理稳定。"""
+    """Open the gripper to 7 cm, then step the simulator for a few iterations to let physics settle."""
     import time
     target = 0.07  # 7cm
     set_gripper_width(sim, target)
@@ -722,7 +722,7 @@ def open_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
     print(f"  ✓ Gripper opened to ~{w:.3f}m")
 
 def close_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
-    """把夹爪闭合到 0cm（靠摩擦夹持），推进若干步沉降。"""
+    """Close the gripper to 0 cm (hold by friction), then step for a few iterations to settle."""
     import time
     set_gripper_width(sim, 0.0)
     for _ in range(steps):
@@ -733,11 +733,11 @@ def close_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
 
 def get_gripper_state(robot) -> dict:
     """
-    现在不再从 robot.get_obs() 猜索引，而是直接读关节。
+    No longer guessing indices from robot.get_obs(); read the joint directly instead.
     """
     w = 0.0
     try:
-        # robot 里有 sim；直接读取
+        # robot contains sim; read directly
         w = get_gripper_width(robot.sim)
     except Exception:
         pass
@@ -1084,10 +1084,10 @@ def diagnose_robot_control(robot, sim, steps: int = 10):
     print("="*60 + "\n")
 
 
-
 # --- add: finger joint helpers (works with panda_gym.Panda) ---
 def _get_panda_uid(sim):
     return sim._bodies_idx.get("panda")
+
 
 def _find_finger_joint_ids(sim):
     """Auto-detect 2 finger joints by name containing 'finger_joint'."""
@@ -1100,9 +1100,10 @@ def _find_finger_joint_ids(sim):
         jname = sim.physics_client.getJointInfo(uid, j)[1].decode()
         if "finger_joint" in jname:
             ids.append(j)
-    # 排序并只取前两个
+    # Only get the first two
     ids = sorted(ids)[:2]
     return ids
+
 
 def set_gripper_width(sim, width_m: float, force: float = 80.0):
     """
@@ -1119,6 +1120,7 @@ We set the target displacement of each fingertip as width/2.
             uid, jid, controlMode=p.POSITION_CONTROL,
             targetPosition=half, force=force
         )
+
 
 def get_gripper_width(sim) -> float:
     """Set the gripper based on the "actual opening width (two-finger spacing)". Panda reads the total width of the two-finger opening at its limit.（m）。"""
