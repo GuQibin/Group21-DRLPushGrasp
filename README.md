@@ -12,6 +12,7 @@ It builds upon a custom PyBullet simulation environment with high-level task abs
 ---
 
 ## 📁 Directory Structure  
+
 Group21-DRLPushGrasp/
 ├── environment.yaml # Conda env spec (Python 3.8 + pip pkgs)
 ├── LICENSE
@@ -28,25 +29,24 @@ Group21-DRLPushGrasp/
 ├── robot_util.py # Robot (gripper/arm) helper functions
 
 
----
 
 ## ⚙️ Environment Setup
 
 ### Create Conda Environment
 If you already have the `environment.yaml` file:
 
-```bash
+
 # Create the Conda environment from the spec (installs Python 3.8 + pip pkgs)
 conda env create -f environment.yaml
 
 # Activate the environment (make sure the name matches the 'name:' in YAML)
-conda activate me5418
+conda acti```vate me5418
 
 ---
 
 ### 🚀 Run Demo
 
-```bash
+
 # Run the full environment loop to verify environment registration & stepping
 python -m scripts.test_custom_env
 
