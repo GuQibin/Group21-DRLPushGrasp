@@ -102,6 +102,3 @@ https://github.com/user-attachments/assets/814c61c7-fae9-4b54-856e-484662029390
 
 
 
-> Both primitives convert object orientation **quaternion → rotation matrix** and transform offsets
-
-> into world frame, so they work on rotated objects.
