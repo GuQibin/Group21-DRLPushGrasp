@@ -1,12 +1,130 @@
-# Group21-DRLPushGrasp
-Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation:  Joint-Space Control of Push-Grasp Strategies in Constrained Environments
+# Group21-DRLPushGrasp  
+**Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation**  
+*Joint-Space Control of Push-Grasp Strategies in Constrained Environments*  
 
+---
 
+## Project Overview  
+This project implements a **hierarchical reinforcement learning (HRL)** framework that enables a robotic manipulator to **jointly plan and execute push-and-grasp strategies** in cluttered or constrained environments.  
+
+It builds upon a custom PyBullet simulation environment with high-level task abstractions (push vs. grasp) and low-level joint-space control, allowing the agent to learn effective manipulation behaviors.  
+
+---
+
+## Test Scenario & Random Baseline
+Each episode samples a diverse set of objects (shape/size/pose/placement randomized), always including red/yellow/green targets. The robot executes a random policy over push/grasp primitives to provide a sanity‐check baseline. We report grasp success, push displacement/goal rate, scene clearance, safety violations, and episodic return.
+
+---
+
+## Directory Structure  
+```text
 Group21-DRLPushGrasp/
+├── environment.yaml                # Conda env spec (Python 3.8 + pip pkgs)
+├── LICENSE
+├── README.md                       # This file
+├── requirements.txt                # (Optional) pip-style dependency list
 ├── envs/
-│   ├── __init__.py          # 使环境可以被注册和发现
-│   └── strategic_env.py     # 我们的核心环境文件
+│   ├── init.py                     # Registers the custom env(s)
+│   └── strategic_env.py            # Core environment implementation
 ├── scripts/
-│   └── test_custom_env.py   # 用于验证我们新环境的脚本
-├── README.md                # 项目说明文件
-└── requirements.txt         # 项目依赖文件
+│   └──  test_custom_env.py          # Simple loop to test the env end-to-end
+│ 
+├── utils/
+│   ├── object_util.py              # Object spawning / utilities
+│   ├── physics_util.py             # Physics helpers (e.g., step/settle)
+│   └── robot_util.py               # Robot (gripper/arm) helper functions
+└── video/
+    └── demo_presentation.mp4       # Demo sample video for presentation
+```
+
+
+## ⚙️ Environment Setup
+
+### Create Conda Environment
+If you already have the `environment.yaml` file:
+
+```Bash
+# Create the Conda environment from the spec (installs Python 3.8 + pip pkgs)
+conda env create -f environment.yaml
+
+# Activate the environment (make sure the name matches the 'name:' in YAML)
+conda activate me5418
+```
+
+---
+
+### Run Demo
+
+```Bash
+# Run the full environment loop to verify environment registration & stepping
+python -m scripts.test_custom_env
+```
+
+---
+
+## Object Utilities (`utils/object_util.py`)
+- **`
+This module centralizes **object-level reasoning** for the Strategic Push–Grasp environment:
+shape encoding for NN inputs, pairwise spatial reasoning, occlusion analysis, safe spawning,
+and simple (non-learned) target selection.
+`**  
+## Physics Utilities (`utils/physics_util.py`)
+- **`
+Utilities that wrap PyBullet’s low-level API into safer, typed helpers for the Strategic Push–Grasp environment. They cover **workspace bounds, collisions, contact forces, stability checks, ray tests, and visualization**. All functions include conservative error handling to keep training loops robust.
+`**  
+## Robot Utilities (`utils/robot_util.py`)
+- **`
+High-level **manipulation primitives** (pick–place and push) and robust helpers for
+end-effector (EE) state, inverse kinematics, motion control, gripper control, and diagnostics.
+These wrap various panda-gym/PyBullet details behind a stable API so the RL policy
+can focus on **when** to push vs. grasp—not *how* to drive every joint.
+`**  
+
+---
+
+## Core Action Primitives
+
+- **`execute_pick_and_place(sim, robot, target_object, alpha_x, alpha_y, goal_pos, workspace_bounds, approach_height=0.15, grasp_height=0.03) -> bool`**  
+  Eight-phase grasp pipeline (approach → descend → close → verify → lift → transport → place → retract).  
+  - **Inputs:** normalized offsets `alpha_x/alpha_y ∈ [-1,1]` mapped to ±2.5 cm around the object center; workspace clipping enforced.  
+  - **Verification:** micro-lift checks object Z-gain (>1 cm) to confirm a *real* grasp.  
+  - **Returns:** `True` only if all phases succeed (prevents false positive rewards).
+
+- **`execute_push(sim, robot, target_object, alpha_x, alpha_y, alpha_theta, workspace_bounds, push_distance=0.05, push_height=0.03, use_object_frame=True) -> bool`**  
+  Contact-point selection + straight-line push along a direction parameterized by `alpha_theta` (mapped to angle).  
+  - Clips pre/post push waypoints into workspace bounds.  
+  - Clean 3-phase routine (pre-push → push → retract).
+
+---
+
+## Sample output (yet to be trained)
+https://github.com/user-attachments/assets/814c61c7-fae9-4b54-856e-484662029390
+
+a series of tests were conducted using a random sampling policy. This approach involves repeatedly calling env.action_space.sample() to generate arbitrary actions, serving as a robust "smoke test" to uncover potential bugs, verify the API, and observe the system's baseline physical behavior without any learned intelligence. 
+the reset logic successfully populates the tabletop with a random number of objects (5-10) of varying types.
+Key features validated during this phase include:
+
+- **Guaranteed Strategic Complexity:** The reset function deterministically creates an occluded object pair (the two red cubes in this example), ensuring every episode requires strategic reasoning.
+
+- **State-Based Visualization:**  Objects are automatically colored based on their state, providing immediate visual feedback. In the scene above, Green cubes are non-occluded and graspable, while Red cubes are occluded and require a push action first. Yellow spheres are designated as push-preferred targets. The green square area represents the destination reward target.
+
+- **Safe Spawning:**  The get_safe_spawn_position utility ensures that no objects are spawned inside the goal or overlapping with one another.
+
+A Random Grasp Attempt. The robot moves to execute a grasp on a green cube based on a randomly sampled action vector [α_skill, α_x, α_y, α_θ].
+
+Observations from this phase confirmed that:
+
+- The hybrid action space correctly translates a positive α_skill into a call to the execute_pick_and_place primitive.
+
+- The local coordinate system for α_x and α_y works as intended, with the robot targeting points relative to the object's center, not the world frame.
+
+- The motion primitives are robust enough to handle even nonsensical random commands (e.g., attempting to grasp the very edge of an object) without crashing the simulation.
+
+## Citation
+````
+@article{gallouedec2021pandagym,
+  title        = {{panda-gym: Open-Source Goal-Conditioned Environments for Robotic Learning}},
+  author       = {Gallou{\'e}dec, Quentin and Cazin, Nicolas and Dellandr{\'e}a, Emmanuel and Chen, Liming},
+  year         = 2021,
+  journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
+}
