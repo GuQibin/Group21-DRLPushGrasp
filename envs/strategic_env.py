@@ -36,6 +36,43 @@ from utils.physics_util import (
     check_collision_with_table,
     check_object_collision
 )
+
+# ======================================================================
+# EXPLORATION BONUS (GLOBAL)
+# ======================================================================
+def compute_exploration_bonus(
+    global_steps: int,
+    total_steps: int,
+    collected_count: int,
+    total_objects: int,
+    current_target: str,
+    objects: dict
+) -> float:
+    if total_objects == 0:
+        return 0.0
+
+    decay_steps = 50_000
+    progress = min(global_steps / decay_steps, 1.0)
+    base_bonus = 2.0 * (1.0 - progress)
+
+    milestone_bonus = 0.0
+    if collected_count == 1:
+        milestone_bonus = 3.0
+    elif collected_count % 3 == 0:
+        milestone_bonus = 1.0
+
+    hard_bonus = 0.0
+    if current_target in objects:
+        meta = objects[current_target]
+        if meta.get("type") in {"sphere", "irregular"}:
+            hard_bonus += 0.5 * (1.0 - progress)
+        if meta.get("is_occluded", False):
+            hard_bonus += 0.5 * (1.0 - progress)
+
+    size_factor = min(total_objects / 5.0, 2.0)
+    total_bonus = (base_bonus + milestone_bonus + hard_bonus) * size_factor
+    return round(float(total_bonus), 3)
+    
 class StrategicPushAndGraspEnv(gym.Env):
     """
     Strategic Push-Grasp Environment with FIXED target selection handling.
@@ -85,12 +122,17 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.previous_joint_positions = None
         self.previous_object_distances = {}
         self.previous_occlusion_states = {}
+        self._prev_distance_to_target = None
         
         # Goal zone
         self.goal_pos = np.array([0.15, 0.15], dtype=np.float32)
         self.goal_size = 0.12
         self.table_bounds = np.array([0.4, 0.4], dtype=np.float32)
 
+        # === TRAINING PROGRESS ===
+        self.global_steps = 0
+        self.total_training_steps = 200_000
+        
         # Define action and observation spaces
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
         obs_dim = 22 + 6 + (self.MAX_OBJECTS * 21) + (self.MAX_OBJECTS * self.MAX_OBJECTS) + self.MAX_OBJECTS
@@ -100,6 +142,9 @@ class StrategicPushAndGraspEnv(gym.Env):
         print(f"Observation space: {self.observation_space}")
         print("=" * 70 + "\n")
 
+    def set_global_steps(self, steps: int):
+        self.global_steps = steps
+        
     def _remove_object(self, body_name: str, mark_as_collected: bool = True):
         """
         FIXED: Remove object and optionally mark as collected to prevent re-selection.
@@ -354,21 +399,21 @@ class StrategicPushAndGraspEnv(gym.Env):
         """
         reward_info = {}
 
-        # 1. Object placement (+5 per object)
-        reward_info['placement'] = 5.0 * num_newly_collected
+        # 1. Object placement (+10 per object)
+        reward_info['placement'] = 10.0 * num_newly_collected
 
-        # 2. Task completion (+25)
+        # 2. Task completion (+50)
         completion_reward = 0.0
         total_objects = len(self.objects) + len(self.collected_objects)
         if total_objects > 0:
-            completion_threshold = total_objects * 0.95
+            completion_threshold = total_objects * 0.60
             prev_collected_count = len(self.collected_objects) - num_newly_collected
             if prev_collected_count < completion_threshold and len(self.collected_objects) >= completion_threshold:
-                completion_reward = 25.0
+                completion_reward = 50.0
                 print(f"✓ Task completed! {len(self.collected_objects)}/{total_objects} objects (+25)")
         reward_info['completion'] = completion_reward
 
-        # 3. Successful push (+0.5)
+        # 3. Successful push (+1.0)
         push_success_reward = 0.0
         if action_type == "push" and self.current_target and self.action_was_successful:
             if self.current_target in self.objects:
@@ -383,7 +428,7 @@ class StrategicPushAndGraspEnv(gym.Env):
                 occlusion_cleared = was_occluded and not now_occluded
 
                 if distance_reduced or occlusion_cleared:
-                    push_success_reward = 0.5
+                    push_success_reward = 1.0
                     if distance_reduced:
                         print(f"✓ Push moved object closer ({previous_dist:.3f}→{current_dist:.3f}m) (+0.5)")
                     if occlusion_cleared:
@@ -397,36 +442,36 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         reward_info['push_success'] = push_success_reward
 
-        # 4. Failed action (-3)
-        reward_info['failure'] = -3.0 if not self.action_was_successful else 0.0
+        # 4. Failed action (-1)
+        reward_info['failure'] = -1.0 if not self.action_was_successful else 0.0
 
         # 5. Workspace violation (-10) - passed in to avoid double-checking
         reward_info['workspace_violation'] = workspace_penalty
 
-        # 6. Collision penalty (-5)
+        # 6. Collision penalty (-2)
         collision_penalty = 0.0
         if check_collision_with_table(self.sim, 'panda', 'table'):
-            collision_penalty = -5.0
-            print(f"✗ Robot collided with table! (-5)")
+            collision_penalty = -2.0
+            print(f"✗ Robot collided with table! (-2)")
 
         if collision_penalty == 0.0:
             for obj_name in self.objects:
                 if obj_name != self.current_target:
                     if check_object_collision(self.sim, 'panda', obj_name):
-                        collision_penalty = -5.0
-                        print(f"✗ Robot collided with {obj_name}! (-5)")
+                        collision_penalty = -2.0
+                        print(f"✗ Robot collided with {obj_name}! (-2)")
                         break
         reward_info['collision'] = collision_penalty
 
-        # 7. Step penalty (-0.1)
-        reward_info['step'] = -0.1
+        # 7. Step penalty (-0.05)
+        reward_info['step'] = -0.05
 
-        # 8. Trajectory length penalty (-0.01/rad)
+        # 8. Trajectory length penalty (-0.005/rad)
         trajectory_penalty = 0.0
         if self.previous_joint_positions is not None:
             joint_displacement = np.abs(current_joints - self.previous_joint_positions)
             total_movement = np.sum(joint_displacement)
-            trajectory_penalty = -0.01 * total_movement
+            trajectory_penalty = -0.005 * total_movement
         reward_info['trajectory'] = trajectory_penalty
 
         # Total reward
@@ -443,11 +488,11 @@ class StrategicPushAndGraspEnv(gym.Env):
         typ = meta.get("type", "unknown")
         non_graspable_types = {"sphere"}
         return is_occluded or (typ in non_graspable_types)
-
+    
     def close(self):
         """Clean up environment resources."""
         self.sim.close()
-        print("\nEnvironment closed.")
+
 
 
 
