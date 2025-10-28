@@ -1,3 +1,5 @@
+# Run with "python -m scripts.ppo_scratch"
+
 # ppo_scratch.py
 import os
 import time
