@@ -13,15 +13,8 @@ import pybullet as p
 import sys
 from pathlib import Path
 
-# Add project root to sys.path BEFORE importing utils
-# Using insert(0, ...) ensures our modules are found first
-project_root = Path(__file__).parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+sys.path.append(str(Path(__file__).parent.parent))
 
-# ============================================================================
-# Now Import Utils Modules (should work after path fix above)
-# ============================================================================
 from utils.object_util import (
     compute_shape_descriptors,
     compute_pairwise_distance_matrix,
@@ -43,7 +36,6 @@ from utils.physics_util import (
     check_collision_with_table,
     check_object_collision
 )
-
 class StrategicPushAndGraspEnv(gym.Env):
     """
     Strategic Push-Grasp Environment with FIXED target selection handling.
@@ -456,4 +448,5 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
