@@ -48,7 +48,7 @@ If you already have the `environment.yaml` file:
 conda env create -f environment.yaml
 
 # Activate the environment (make sure the name matches the 'name:' in YAML)
-conda activate me5418
+conda activate me5418-demo
 ```
 
 ---
