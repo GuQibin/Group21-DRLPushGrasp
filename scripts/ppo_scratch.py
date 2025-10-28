@@ -17,6 +17,14 @@ import gymnasium as gym
 
 import time
 
+# --- progress utils (NEW) ---
+def _fmt_secs(s: float) -> str:
+    s = max(0, float(s))
+    h = int(s // 3600); s -= 3600*h
+    m = int(s // 60);   s -= 60*m
+    return f"{h:02d}:{m:02d}:{int(s):02d}"
+
+
 # ====== 引入你的环境（按你的工程结构改这两行）======
 # from envs.strategic_pushgrasp_env import StrategicPushAndGraspEnv
 from envs.strategic_env import StrategicPushAndGraspEnv
@@ -39,21 +47,25 @@ class ActorCritic(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_size=256, num_layers=2, activation="tanh"):
         super().__init__()
 
-        # 根据字符串选择激活函数
-        act_fn = {
-            "tanh": nn.Tanh(),
-            "relu": nn.ReLU(),
-            "leakyrelu": nn.LeakyReLU(),
-            "elu": nn.ELU()
-        }.get(activation.lower(), nn.Tanh())
+        # 用“类/工厂”，每次循环都 new 一个激活层实例
+        def _act_factory(name: str):
+            name = name.lower()
+            if name == "tanh": return nn.Tanh
+            if name == "relu": return nn.ReLU
+            if name == "leakyrelu": return lambda: nn.LeakyReLU(negative_slope=0.01)
+            if name == "elu": return nn.ELU
+            return nn.Tanh
+
+        Act = _act_factory(activation)
 
         layers = []
         in_dim = obs_dim
         for _ in range(num_layers):
             layers.append(nn.Linear(in_dim, hidden_size))
-            layers.append(act_fn)
+            layers.append(Act())           # ✅ 每层一个新实例
             in_dim = hidden_size
         self.backbone = nn.Sequential(*layers)
+
 
         self.mu_head = nn.Linear(hidden_size, act_dim)
         self.logstd = nn.Parameter(torch.zeros(act_dim))
@@ -214,8 +226,27 @@ def ppo_train(cfg=PPOConfig()):
     ep_len = 0
     global_steps = 0
 
+    # --- progress meters (NEW) ---
+    start_time = time.time()
+    last_report_time = start_time
+    rollout_count = 0
+    update_count = 0
+    steps_since_last_report = 0
+
+    # --- 训练日志 (NEW) ---
+    loss_log = []
+    return_log = []
+
+
+    import matplotlib.pyplot as plt
+    save_dir = os.path.join(os.getcwd(), "plots")
+    os.makedirs(save_dir, exist_ok=True)
+    print(f"[Info] Plot dir: {save_dir}")
+
     while global_steps < cfg.total_steps:
         # ====== 收集一段 on-policy 轨迹 ======
+        # ====== 收集一段 on-policy 轨迹 ======
+        ep_returns_this_rollout = []   # (NEW) 记录这一轮次内结束的所有 episode 的 return
         for _ in range(cfg.rollout_steps):
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
             with torch.no_grad():
@@ -245,7 +276,7 @@ def ppo_train(cfg=PPOConfig()):
             if done_flag > 0.5:
                 # 终止/截断就 reset
                 print(f"[Episode End] Return={ep_ret:.3f}, Length={ep_len}")
-                time.sleep(2)
+                ep_returns_this_rollout.append(ep_ret)   # (NEW) 只记录到“本轮次”的暂存里
                 obs, _ = env.reset()
                 ep_ret, ep_len = 0.0, 0
 
@@ -261,21 +292,21 @@ def ppo_train(cfg=PPOConfig()):
         buf.adv[:adv.shape[0]] = adv
 
         # ====== PPO 更新（多 epoch 小批次）======
-        for _ in range(cfg.update_epochs):
+        epoch_loss_list = []  # (NEW) 统计本轮次里各 epoch 的平均 loss
+        for epoch in range(cfg.update_epochs):
+            # 统计本 epoch 的平均指标
+            kl_list, pol_list, val_list, ent_list, tot_list = [], [], [], [], []
             for mb_obs, mb_raw_a, _, mb_logp_old, _, mb_adv, mb_ret in buf.get(cfg.mini_batch):
                 new_logp, entropy, v = net.evaluate_actions(mb_obs, mb_raw_a)
 
+                # ratio & 损失
                 ratio = torch.exp(new_logp - mb_logp_old)
-                # 策略损失（带剪切）
                 surr1 = ratio * mb_adv
                 surr2 = torch.clamp(ratio, 1.0 - cfg.clip_eps, 1.0 + cfg.clip_eps) * mb_adv
                 policy_loss = -torch.min(surr1, surr2).mean()
 
-                # 价值损失
                 value_loss = 0.5 * (mb_ret - v).pow(2).mean()
-
-                # 熵正则（鼓励探索）
-                entropy_loss = -entropy.mean()
+                entropy_loss = -entropy.mean()  # 取负号，后面乘以 ent_coef
 
                 loss = policy_loss + cfg.vf_coef * value_loss + cfg.ent_coef * entropy_loss
 
@@ -284,11 +315,100 @@ def ppo_train(cfg=PPOConfig()):
                 nn.utils.clip_grad_norm_(net.parameters(), cfg.max_grad_norm)
                 opt.step()
 
-        # 小结
-        approx_kl = (mb_logp_old - new_logp).mean().item()
-        print(f"[Update] Steps={global_steps} | Loss={loss.item():.5f} | KL={approx_kl:.5f}")
-        time.sleep(5)
+                # 统计本 minibatch 的 KL（近似）
+                with torch.no_grad():
+                    approx_kl_mb = (mb_logp_old - new_logp).mean().item()
+                    kl_list.append(approx_kl_mb)
+                    pol_list.append(policy_loss.item())
+                    val_list.append(value_loss.item())
+                    ent_list.append((-entropy_loss).item())  # 还原成正的 entropy
+                    tot_list.append(loss.item())
 
+            # 每个 epoch 打印一次
+            print(
+                f"[Update-Epoch {epoch+1}/{cfg.update_epochs}] "
+                f"Steps={global_steps} | "
+                f"Loss={np.mean(tot_list):.5f} | "
+                f"Policy={np.mean(pol_list):.5f} | "
+                f"Value={np.mean(val_list):.5f} | "
+                f"Entropy={np.mean(ent_list):.5f} | "
+                f"KL={np.mean(kl_list):.5f}"
+            )
+            # 记录平均 loss（每个 epoch）
+            epoch_loss_list.append(np.mean(tot_list))   # (NEW) 暂存本 epoch 平均 loss
+
+        # —— 这次 rollout 结束后，聚合“按轮次”的指标 ——
+        # 1) loss：这一轮次跨所有 epoch 的平均
+        rollout_loss = float(np.mean(epoch_loss_list)) if epoch_loss_list else float("nan")
+        loss_log.append(rollout_loss)
+
+        # 2) return：这一轮次里结束的多个 episode 的平均
+        rollout_return = float(np.mean(ep_returns_this_rollout)) if ep_returns_this_rollout else float("nan")
+        return_log.append(rollout_return)
+
+        # --- progress summary (REFINED) ---
+        rollout_count += 1
+        update_count += cfg.update_epochs
+
+        elapsed = time.time() - start_time
+        steps_since_last_report += cfg.rollout_steps
+
+        progress = min(1.0, global_steps / float(cfg.total_steps))
+        eta = (elapsed / progress - elapsed) if progress > 0 else float('inf')
+
+        # FPS：自上次打印以来
+        now = time.time()
+        fps = steps_since_last_report / max(1e-6, (now - last_report_time))
+        last_report_time = now
+        steps_since_last_report = 0
+
+        # 文本进度条（单行刷新）
+        bar_len = 40
+        filled = int(bar_len * progress)
+        bar = "#" * filled + "-" * (bar_len - filled)
+
+        line = (f"[Progress] [{bar}] {progress*100:6.2f}%  "
+                f"steps={global_steps}/{cfg.total_steps}  "
+                f"rollouts={rollout_count}  updates={update_count}  "
+                f"fps={fps:6.1f}  "
+                f"elapsed={_fmt_secs(elapsed)}  ETA={_fmt_secs(eta)}")
+
+        print(line, end="\r", flush=True)  # 关键：同一行刷新
+
+
+        # ====== 每 5 个 rollout 保存一次图 (NEW) ======
+        if rollout_count % 5 == 0:
+            # X 轴按“轮次”
+            xs_loss = np.arange(1, len(loss_log) + 1)
+            xs_ret  = np.arange(1, len(return_log) + 1)
+
+            # Loss 曲线（随轮次）
+            loss_path = os.path.join(save_dir, "loss_curve.png")
+            plt.figure(figsize=(6,4))
+            plt.plot(xs_loss, loss_log, linewidth=2)
+            plt.xlabel("Rollout (iteration)")
+            plt.ylabel("Loss")
+            plt.title("PPO Training Loss vs Rollouts")
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.tight_layout()
+            plt.savefig(loss_path, dpi=300)
+            plt.close()
+
+            # Return 曲线（随轮次）
+            return_path = os.path.join(save_dir, "return_curve.png")
+            plt.figure(figsize=(6,4))
+            plt.plot(xs_ret, return_log, linewidth=2)
+            plt.xlabel("Rollout (iteration)")
+            plt.ylabel("Return (mean per rollout)")
+            plt.title("Episode Return vs Rollouts")
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.tight_layout()
+            plt.savefig(return_path, dpi=300)
+            plt.close()
+
+            print(f"[Saved] Plots updated @ rollout {rollout_count}:")
+            print(f"        - {loss_path}")
+            print(f"        - {return_path}")
 
     env.close()
     return net
@@ -397,7 +517,7 @@ if __name__ == "__main__":
         device="cuda" if torch.cuda.is_available() else "cpu",
         seed=42,
         hidden_size=256,          # 每层隐藏维度
-        num_layers=2,             # 隐藏层层数
+        num_layers=4,             # 隐藏层层数
         activation="tanh"    
     )
     net = ppo_train(cfg)

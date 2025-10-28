@@ -26,7 +26,7 @@ from utils.object_util import (
     check_object_in_goal
 )
 
-from utils.robot_util import (
+from utils.robot_util1 import (
     execute_pick_and_place,
     execute_push
 )
@@ -894,7 +894,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         │ Component                          │ Value  │ Purpose          │
         ├────────────────────────────────────┼────────┼──────────────────┤
         │ 1. Object placement                │ +5     │ Primary goal     │
-        │ 2. Task completion (≥95%)          │ +25    │ Episode bonus    │
+        │ 2. Task completion (≥60%)          │ +25    │ Episode bonus    │
         │ 3. Successful push (progress)      │ +0.5   │ Push shaping     │
         │ 4. Failed action                   │ -3     │ Discourage fails │
         │ 5. Workspace violation             │ -10    │ Safety           │
@@ -916,7 +916,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         completion_reward = 0.0
         total_objects = len(self.objects) + len(self.collected_objects)
         if total_objects > 0:
-            completion_threshold = total_objects * 0.95
+            completion_threshold = total_objects * 0.60
             prev_collected_count = len(self.collected_objects) - num_newly_collected
             if prev_collected_count < completion_threshold and len(self.collected_objects) >= completion_threshold:
                 completion_reward = 25.0
