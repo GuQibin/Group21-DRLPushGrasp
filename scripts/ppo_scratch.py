@@ -1,4 +1,4 @@
-# Run with "python -m scripts.ppo_scratch"
+# Run with "python -m scripts.ppo_scratch_v2_fixed"
 
 # ppo_scratch.py
 import os
@@ -15,9 +15,7 @@ from torch.distributions import Normal
 
 import gymnasium as gym
 
-import time
-
-# --- progress utils (NEW) ---
+# --- progress utils ---
 def _fmt_secs(s: float) -> str:
     s = max(0, float(s))
     h = int(s // 3600); s -= 3600*h
@@ -25,12 +23,11 @@ def _fmt_secs(s: float) -> str:
     return f"{h:02d}:{m:02d}:{int(s):02d}"
 
 
-# ====== 引入你的环境（按你的工程结构改这两行）======
-# from envs.strategic_pushgrasp_env import StrategicPushAndGraspEnv
+# ====== Import your environment ======
 from envs.strategic_env import StrategicPushAndGraspEnv
 # ==================================================
 
-#added cong
+# Reward Normalizer
 class RewardNormalizer:
     """
     Running normalization of rewards to stabilize training.
@@ -62,8 +59,8 @@ class RewardNormalizer:
         self.returns = 0.0
 
 
-# ---- 工具：把动作用 tanh 限幅到 [-1,1]，同时修正 log_prob（Tanh 正态的对数雅可比项） ----
-def squash_action_and_log_prob(mu, std, raw_action=None, eps=1e-6):
+# ---- Utility: squash action to [-1,1] with tanh and correct log_prob ----
+def squash_action_and_log_prob(mu, std, raw_action=None, eps=1e-4):  # FIXED: increased eps from 1e-6
     dist = Normal(mu, std)
     if raw_action is None:
         raw_action = dist.rsample()   # reparameterization
@@ -74,12 +71,12 @@ def squash_action_and_log_prob(mu, std, raw_action=None, eps=1e-6):
     log_prob -= torch.log(1 - action.pow(2) + eps).sum(-1, keepdim=True)
     return action, log_prob, raw_action
 
-# ---- 网络 ----
+# ---- Network ----
 class ActorCritic(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_size=256, num_layers=2, activation="tanh"):
         super().__init__()
 
-        # 用“类/工厂”，每次循环都 new 一个激活层实例
+        # Activation factory
         def _act_factory(name: str):
             name = name.lower()
             if name == "tanh": return nn.Tanh
@@ -94,10 +91,9 @@ class ActorCritic(nn.Module):
         in_dim = obs_dim
         for _ in range(num_layers):
             layers.append(nn.Linear(in_dim, hidden_size))
-            layers.append(Act())           # ✅ 每层一个新实例
+            layers.append(Act())
             in_dim = hidden_size
         self.backbone = nn.Sequential(*layers)
-
 
         self.mu_head = nn.Linear(hidden_size, act_dim)
         self.logstd = nn.Parameter(torch.zeros(act_dim))
@@ -121,17 +117,17 @@ class ActorCritic(nn.Module):
         return a, logp, v, mu, std, raw
 
     def evaluate_actions(self, obs, raw_actions):
-        """给定 obs 和 '未tanh前' 的 raw_actions，复现 log_prob（做 PPO ratio）"""
+        """Given obs and raw_actions (before tanh), recompute log_prob for PPO ratio"""
         mu, std, v = self.forward(obs)
         dist = Normal(mu, std)
         logp = dist.log_prob(raw_actions).sum(-1, keepdim=True)
-        # tanh 的雅可比修正：注意这里也要把 raw_actions 映成 tanh(action)
+        # tanh jacobian correction
         a = torch.tanh(raw_actions)
-        logp -= torch.log(1 - a.pow(2) + 1e-6).sum(-1, keepdim=True)
-        entropy = dist.entropy().sum(-1, keepdim=True)  # 原高斯熵（未扣雅可比），够用
+        logp -= torch.log(1 - a.pow(2) + 1e-4).sum(-1, keepdim=True)  # FIXED: increased eps
+        entropy = dist.entropy().sum(-1, keepdim=True)
         return logp, entropy, v
 
-# ---- Rollout Buffer（on-policy）----
+# ---- Rollout Buffer (on-policy) ----
 class RolloutBuffer:
     def __init__(self, size, obs_dim, act_dim, device):
         self.size = size
@@ -140,14 +136,14 @@ class RolloutBuffer:
         self.full = False
 
         self.obs   = torch.zeros((size, obs_dim), dtype=torch.float32, device=device)
-        self.raw_a = torch.zeros((size, act_dim), dtype=torch.float32, device=device) # 未tanh前
-        self.a     = torch.zeros((size, act_dim), dtype=torch.float32, device=device) # tanh后动作（可选）
+        self.raw_a = torch.zeros((size, act_dim), dtype=torch.float32, device=device) # before tanh
+        self.a     = torch.zeros((size, act_dim), dtype=torch.float32, device=device) # after tanh
         self.logp  = torch.zeros((size, 1),       dtype=torch.float32, device=device)
         self.v     = torch.zeros((size, 1),       dtype=torch.float32, device=device)
         self.r     = torch.zeros((size, 1),       dtype=torch.float32, device=device)
         self.done  = torch.zeros((size, 1),       dtype=torch.float32, device=device)
 
-        # GAE 之后填充
+        # Filled after GAE computation
         self.adv   = torch.zeros((size, 1),       dtype=torch.float32, device=device)
         self.ret   = torch.zeros((size, 1),       dtype=torch.float32, device=device)
 
@@ -194,185 +190,196 @@ class RolloutBuffer:
                 self.ret[mb],
             )
 
-# ---- 训练器 ---- added cong
+# ---- Configuration ----
 @dataclass
 class PPOConfig:
     total_steps: int = 200_000
-    rollout_steps: int = 8192 # original: 4096
-    update_epochs: int = 4 # original: 10
-    mini_batch: int = 512 #original: 256
+    rollout_steps: int = 8192
+    update_epochs: int = 4
+    mini_batch: int = 512
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_eps: float = 0.2
-    vf_coef: float = 1.0 # original: 0.5
-    ent_coef_start: float = 0.01     # added cong
-    ent_coef_end: float = 0.001      # added cong
-    # ent_coef: float = 0.01 
+    vf_coef: float = 1.0
+    ent_coef_start: float = 0.01
+    ent_coef_end: float = 0.001
     lr: float = 3e-4
-    max_grad_norm: float = 0.5 # original: 1.0
-    use_lr_schedule: bool = True     # added cong
-    lr_min: float = 1e-5        # added cong
-    target_kl: float = 0.02          # NEW: Stop if KL divergence exceeds this - added cong
-    normalize_rewards: bool = True   # NEW: Enable reward normalization - added cong
+    max_grad_norm: float = 0.5
+    use_lr_schedule: bool = True
+    lr_min: float = 1e-5
+    target_kl: float = 0.02
+    normalize_rewards: bool = True
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 42
 
-    # ===== 新增网络结构参数 =====
-    hidden_size: int = 256          # 每层隐藏维度
-    num_layers: int = 2             # 隐藏层层数
-    activation: str = "tanh"        # 激活函数类型 ('tanh', 'relu', etc.)
+    # Network architecture parameters
+    hidden_size: int = 256
+    num_layers: int = 2
+    activation: str = "tanh"
 
-#======added cong=====
-def get_entropy_coef(step, total_steps, start_coef, end_coef):
-    """Linear decay of entropy coefficient over training"""
-    progress = min(step / total_steps, 1.0)
+
+# ====== MISSING FUNCTION 1: get_entropy_coef ======
+def get_entropy_coef(current_step, total_steps, start_coef, end_coef):
+    """
+    Linearly decay entropy coefficient from start_coef to end_coef over training.
+    This encourages exploration early and exploitation later.
+    """
+    progress = min(1.0, current_step / total_steps)
     return start_coef + (end_coef - start_coef) * progress
-#======added cong=====
 
+
+# ====== MISSING FUNCTION 2: make_env ======
 def make_env(render=False):
-    env = StrategicPushAndGraspEnv(render_mode="human" if render else 'rgb_array')
+    """
+    Factory function to create the environment.
+    Args:
+        render: If True, create environment with rendering enabled
+    Returns:
+        env: Gymnasium environment instance
+    """
+    render_mode = "human" if render else None
+    env = StrategicPushAndGraspEnv(render_mode=render_mode)
     return env
 
-def ppo_train(cfg=PPOConfig()):
+
+# ====== MISSING FUNCTION 3: ppo_train ======
+def ppo_train(cfg: PPOConfig):
+    """
+    Main PPO training loop
+    """
+    # ====== Setup ======
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
 
-    # === 打印模型参数配置 ===
-    print("\n================ PPO CONFIGURATION ================")
-    for k, v in vars(cfg).items():
-        print(f"{k:<20}: {v}")
-    print("===================================================")
-    time.sleep(2)
-
+    # Create environment
     env = make_env(render=False)
-    obs, _ = env.reset(seed=cfg.seed)
-
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
 
-    print(f"\n[ENV INFO] obs_dim = {obs_dim}, act_dim = {act_dim}")
-    time.sleep(2)
+    print("="*70)
+    print("PPO TRAINING CONFIGURATION")
+    print("="*70)
+    print(f"Observation dim: {obs_dim}")
+    print(f"Action dim: {act_dim}")
+    print(f"Device: {cfg.device}")
+    print(f"Total steps: {cfg.total_steps:,}")
+    print(f"Rollout steps: {cfg.rollout_steps:,}")
+    print(f"Update epochs: {cfg.update_epochs}")
+    print(f"Mini batch: {cfg.mini_batch}")
+    print(f"Learning rate: {cfg.lr}")
+    print(f"Network: {cfg.num_layers} layers x {cfg.hidden_size} units ({cfg.activation})")
+    print("="*70 + "\n")
 
+    # ====== Initialize network and optimizer ======
     net = ActorCritic(
-    obs_dim,
-    act_dim,
-    hidden_size=cfg.hidden_size,
-    num_layers=cfg.num_layers,
-    activation=cfg.activation
+        obs_dim, 
+        act_dim, 
+        hidden_size=cfg.hidden_size,
+        num_layers=cfg.num_layers,
+        activation=cfg.activation
     ).to(cfg.device)
-
+    
     opt = optim.Adam(net.parameters(), lr=cfg.lr)
-
-    # added cong: Learning rate scheduler (cosine annealing)
+    
+    # Learning rate scheduler
     scheduler = None
     if cfg.use_lr_schedule:
-        from torch.optim.lr_scheduler import CosineAnnealingLR
-        total_updates = cfg.total_steps // cfg.rollout_steps
-        scheduler = CosineAnnealingLR(opt, T_max=total_updates, eta_min=cfg.lr_min)
-        print(f"Learning rate scheduler enabled: {cfg.lr} → {cfg.lr_min}")
+        scheduler = optim.lr_scheduler.LinearLR(
+            opt,
+            start_factor=1.0,
+            end_factor=cfg.lr_min / cfg.lr,
+            total_iters=cfg.total_steps // cfg.rollout_steps
+        )
 
-    buf = RolloutBuffer(cfg.rollout_steps, obs_dim, act_dim, cfg.device)
-
-    # ========================================================================
-    # added cong NEW: Initialize reward normalizer
-    # ========================================================================
+    # Initialize reward normalizer
     reward_normalizer = None
     if cfg.normalize_rewards:
         reward_normalizer = RewardNormalizer(gamma=cfg.gamma)
-        print(f"Reward normalizer initialized")
 
-    ep_ret = 0.0
-    ep_len = 0
+    # ====== Initialize buffer ======
+    buf = RolloutBuffer(cfg.rollout_steps, obs_dim, act_dim, cfg.device)
+
+    # ====== Training metrics ======
     global_steps = 0
-
-    # --- progress meters (NEW) ---
+    episode_returns = []
+    episode_lengths = []
+    ep_ret, ep_len = 0.0, 0
+    
+    # Reset environment
+    obs, _ = env.reset(seed=cfg.seed)
     start_time = time.time()
-    last_report_time = start_time
-    rollout_count = 0
-    update_count = 0
-    steps_since_last_report = 0
 
-    # --- 训练日志 (NEW) removed cong ---
-    ## loss_log = []
-    ## return_log = []
+    print("Starting training...\n")
 
-
-    import matplotlib.pyplot as plt
-    save_dir = os.path.join(os.getcwd(), "plots")
-    os.makedirs(save_dir, exist_ok=True)
-    print(f"[Info] Plot dir: {save_dir}")
-
+    # ====== Main training loop ======
     while global_steps < cfg.total_steps:
-        # ====== 收集一段 on-policy 轨迹 ======
-        ep_returns_this_rollout = []   # (NEW) 记录这一轮次内结束的所有 episode 的 return
-        for _ in range(cfg.rollout_steps):
-            obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
-            with torch.no_grad():
-                a_t, logp_t, v_t, mu, std, raw = net.act(obs_t)
-            # 注意：env 期望的是 tanh 后的动作 a_t ∈ [-1,1]
-            action = a_t.squeeze(0).cpu().numpy()
-            next_obs, r, terminated, truncated, info = env.step(action)
-            done_flag = float(terminated or truncated)
-
-            # ===== added cong Normalize reward before storing ====
-            if reward_normalizer is not None:
-                reward_normalizer.update(r)
-                r_normalized = reward_normalizer.normalize(r)
-            else:
-                r_normalized = r
-            # ======================================================
-            
-            # 存入 buffer（保存 raw action 以复现 logprob）
-            buf.add(
-                obs_t.squeeze(0),
-                raw.squeeze(0),
-                a_t.squeeze(0),
-                logp_t.squeeze(0),
-                v_t.squeeze(0),
-                torch.tensor([r], dtype=torch.float32, device=cfg.device),
-                torch.tensor([done_flag], dtype=torch.float32, device=cfg.device),
-            )
-
-            ep_ret += r  # Track original (not normalized) for logging
-            ep_len += 1
-            global_steps += 1
-
-            obs = next_obs
-
-            if done_flag > 0.5:
-                # Episode ended - added cong
-                episode_returns.append(ep_ret)
-                episode_lengths.append(ep_len)
-
-                # Calculate statistics for last 10 episodes -  added cong
-                recent_returns = episode_returns[-10:] if len(episode_returns) >= 10 else episode_returns
-                avg_return = np.mean(recent_returns)
-                std_return = np.std(recent_returns)
-
-                print(f"[Episode End] Steps={global_steps:6d} | Return={ep_ret:7.2f} | "
-                      f"Length={ep_len:3d} | Avg(10)={avg_return:7.2f}±{std_return:5.2f}")
+        # ====== Collect rollout ======
+        net.eval()
+        with torch.inference_mode():
+            for step in range(cfg.rollout_steps):
+                obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
+                a, logp, v, mu, std, raw_a = net.act(obs_t)
                 
-                obs, _ = env.reset()
-                ep_ret, ep_len = 0.0, 0
-
+                action = a.squeeze(0).cpu().numpy()
+                obs_next, reward, terminated, truncated, info = env.step(action)
+                
+                # Normalize reward if enabled
                 if reward_normalizer is not None:
-                    reward_normalizer.reset_episode()
-
-        # ====== GAE / Return ======
-        with torch.no_grad():
+                    reward_normalizer.update(reward)
+                    reward = reward_normalizer.normalize(reward)
+                
+                ep_ret += reward
+                ep_len += 1
+                global_steps += 1
+                
+                done = terminated or truncated
+                
+                # Store transition
+                buf.add(
+                    obs_t.squeeze(0),
+                    raw_a.squeeze(0),
+                    a.squeeze(0),
+                    logp.squeeze(0),
+                    v.squeeze(0),
+                    torch.tensor([reward], dtype=torch.float32, device=cfg.device),
+                    torch.tensor([float(done)], dtype=torch.float32, device=cfg.device)
+                )
+                
+                obs = obs_next
+                
+                # Episode done
+                if done:
+                    episode_returns.append(ep_ret)
+                    episode_lengths.append(ep_len)
+                    
+                    if reward_normalizer is not None:
+                        reward_normalizer.reset_episode()
+                    
+                    # Print episode info
+                    elapsed = time.time() - start_time
+                    recent_returns = episode_returns[-10:] if len(episode_returns) >= 10 else episode_returns
+                    avg_recent = np.mean(recent_returns)
+                    
+                    print(f"[Episode {len(episode_returns):4d}] Steps={global_steps:6d} | "
+                          f"Return={ep_ret:7.2f} | Length={ep_len:3d} | "
+                          f"Avg10={avg_recent:7.2f} | Time={_fmt_secs(elapsed)}")
+                    
+                    ep_ret, ep_len = 0.0, 0
+                    obs, _ = env.reset()
+                    
+                if global_steps >= cfg.total_steps:
+                    break
+        
+        # ====== Compute GAE ======
+        with torch.inference_mode():
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
             _, _, last_v = net.forward(obs_t)
-        buf.compute_gae(last_v=last_v.squeeze(0), gamma=cfg.gamma, lam=cfg.gae_lambda)
+            last_v = last_v.squeeze()
+        
+        buf.compute_gae(last_v, gamma=cfg.gamma, lam=cfg.gae_lambda)
 
-        # 标准化优势（重要）
-        adv = buf.adv[:buf.ptr if not buf.full else buf.size]
-        adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-        buf.adv[:adv.shape[0]] = adv
-
-        # ================================================================
-        # NEW: Get current entropy coefficient (decays over training) - added cong
-        # ================================================================
+        # ====== Get current entropy coefficient (decays over training) ======
         current_ent_coef = get_entropy_coef(
             global_steps, 
             cfg.total_steps,
@@ -380,16 +387,20 @@ def ppo_train(cfg=PPOConfig()):
             cfg.ent_coef_end
         )
 
-        # ====== PPO 更新（多 epoch 小批次）======
+        # ====== PPO update (multiple epochs over mini-batches) ======
+        net.train()
         total_policy_loss = 0
         total_value_loss = 0
         total_entropy = 0
+        total_kl = 0
         num_updates = 0
         
+        early_stop = False
         for epoch in range(cfg.update_epochs):
-            early_stop = False
-            
             for mb_obs, mb_raw_a, _, mb_logp_old, _, mb_adv, mb_ret in buf.get(cfg.mini_batch):
+                # FIXED: Normalize advantages
+                mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                
                 new_logp, entropy, v = net.evaluate_actions(mb_obs, mb_raw_a)
 
                 ratio = torch.exp(new_logp - mb_logp_old)
@@ -397,20 +408,23 @@ def ppo_train(cfg=PPOConfig()):
                 # Check KL divergence for early stopping
                 with torch.no_grad():
                     approx_kl = (mb_logp_old - new_logp).mean().item()
+                    total_kl += approx_kl
+                    
+                    # FIXED: Early stopping should break both loops
                     if approx_kl > cfg.target_kl:
                         print(f"  ⚠️ Early stopping at epoch {epoch+1}/{cfg.update_epochs}, KL={approx_kl:.4f} > {cfg.target_kl}")
                         early_stop = True
                         break
                 
-                # 策略损失（带剪切）
+                # Policy loss (clipped)
                 surr1 = ratio * mb_adv
                 surr2 = torch.clamp(ratio, 1.0 - cfg.clip_eps, 1.0 + cfg.clip_eps) * mb_adv
                 policy_loss = -torch.min(surr1, surr2).mean()
 
-                # 价值损失
+                # Value loss
                 value_loss = 0.5 * (mb_ret - v).pow(2).mean()
 
-                # 熵正则（鼓励探索）- 使用动态系数
+                # Entropy regularization (encourage exploration)
                 entropy_loss = -entropy.mean()
 
                 # Total loss with current entropy coefficient
@@ -427,12 +441,11 @@ def ppo_train(cfg=PPOConfig()):
                 total_entropy += entropy.mean().item()
                 num_updates += 1
             
+            # FIXED: Break outer loop if early stopping triggered
             if early_stop:
                 break
 
-        # ================================================================
-        # NEW: Step learning rate scheduler
-        # ================================================================
+        # ====== Step learning rate scheduler ======
         if scheduler is not None:
             scheduler.step()
             current_lr = scheduler.get_last_lr()[0]
@@ -443,10 +456,12 @@ def ppo_train(cfg=PPOConfig()):
         avg_policy_loss = total_policy_loss / num_updates if num_updates > 0 else 0
         avg_value_loss = total_value_loss / num_updates if num_updates > 0 else 0
         avg_entropy = total_entropy / num_updates if num_updates > 0 else 0
+        avg_kl = total_kl / num_updates if num_updates > 0 else 0
 
         print(f"[Update] Steps={global_steps:6d} | "
               f"PolicyLoss={avg_policy_loss:.4f} | ValueLoss={avg_value_loss:.4f} | "
-              f"Entropy={avg_entropy:.4f} | EntCoef={current_ent_coef:.4f} | LR={current_lr:.2e}")
+              f"Entropy={avg_entropy:.4f} | KL={avg_kl:.4f} | "
+              f"EntCoef={current_ent_coef:.4f} | LR={current_lr:.2e}")
 
     env.close()
 
@@ -466,32 +481,31 @@ def ppo_train(cfg=PPOConfig()):
     return net
 
 
-# ====== 评估：用确定性策略跑若干回合，统计指标 ======
+# ====== Evaluation: run deterministic policy for several episodes ======
 def evaluate_policy(net, make_env_fn, episodes=10, render=False, record_dir=None, seed=123):
     """
     Args:
-        net: 训练好的 ActorCritic
-        make_env_fn: 一个无参函数，返回一个新的 env 实例（和训练时相同环境）
-        episodes: 评估回合数
-        render: 是否人眼渲染
-        record_dir: 若提供路径，将用 RecordVideo 录制评估视频（gymnasium>=0.29）
-        seed: 评估环境的随机种子起点
+        net: trained ActorCritic
+        make_env_fn: function that returns a new env instance
+        episodes: number of evaluation episodes
+        render: whether to render visually
+        record_dir: if provided, record videos using RecordVideo
+        seed: random seed for evaluation
     Returns:
-        stats: dict，包含 avg_return、avg_length、success_rate（若 info 有该字段）
+        stats: dict containing avg_return, avg_length, success_rate
     """
-    import gymnasium as gym
     from collections import defaultdict
 
-    # 每次评估都新建环境，避免被训练 loop 的状态影响
+    # Create fresh environment for evaluation
     env = make_env_fn(render=render)
 
-    # 可选：视频录制（需要 env 支持 render_mode="rgb_array"）
+    # Optional: video recording
     if record_dir is not None:
         try:
             env = gym.wrappers.RecordVideo(
                 env,
                 video_folder=record_dir,
-                episode_trigger=lambda i: True,  # 录每一回合
+                episode_trigger=lambda i: True,
                 name_prefix="eval"
             )
             print(f"[Eval] Recording to: {record_dir}")
@@ -506,15 +520,14 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=False, record_dir=None
 
     with torch.inference_mode():
         for ep in range(episodes):
-            # 为了可重复性，回合级种子递增
             obs, _ = env.reset(seed=int(rng.randint(0, 1e9)))
             ep_ret, ep_len = 0.0, 0
 
             while True:
-                # 确定性动作：用均值 mu，经 tanh 限幅
+                # Deterministic action: use mean mu, with tanh squashing
                 obs_t = torch.as_tensor(obs, dtype=torch.float32, device=next(net.parameters()).device).unsqueeze(0)
                 mu, _, _v = net.forward(obs_t)
-                a = torch.tanh(mu)  # 确定性 = 不采样，直接用 mu
+                a = torch.tanh(mu)  # deterministic = no sampling, just use mu
                 action = a.squeeze(0).cpu().numpy()
 
                 obs, r, terminated, truncated, info = env.step(action)
@@ -528,9 +541,8 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=False, record_dir=None
                 if done:
                     returns.append(ep_ret)
                     lengths.append(ep_len)
-                    # 统计成功（如果 info 有返回）
+                    # Track success if info contains it
                     if isinstance(info, dict):
-                        # 常见键名：success / is_success / success_rate（你的环境可自定义）
                         for key in ("success", "is_success"):
                             if key in info:
                                 succ_total += 1
@@ -554,25 +566,25 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=False, record_dir=None
     print("[Eval Summary]", stats)
     return stats
 
+
 if __name__ == "__main__":
     cfg = PPOConfig(
         total_steps=200_000,
-        rollout_steps= 8192, #original: 4096
-        update_epochs=4, #original: 10
-        mini_batch=512, #original: 256
+        rollout_steps=8192,
+        update_epochs=4,
+        mini_batch=512,
         gamma=0.99,
         gae_lambda=0.95,
         clip_eps=0.2,
-        vf_coef=1.0, #original: 0.5
+        vf_coef=1.0,
         ent_coef_start=0.01,
         ent_coef_end=0.001,
-        # original: ent_coef=0.01,
         lr=3e-4,
-        max_grad_norm= 0.5, #original: 1.0
-        use_lr_schedule=True, #added cong
-        lr_min=1e-5,                # (added cong)
-        target_kl=0.02,           # Early stopping threshold (added cong)
-        normalize_rewards=True,   # Enable reward normalization (added cong)
+        max_grad_norm=0.5,
+        use_lr_schedule=True,
+        lr_min=1e-5,
+        target_kl=0.02,
+        normalize_rewards=True,
         device="cuda" if torch.cuda.is_available() else "cpu",
         seed=42,
         hidden_size=256,
@@ -581,13 +593,13 @@ if __name__ == "__main__":
     )
     net = ppo_train(cfg)
 
-    # 训练完成后做一次评估（不渲染，跑 10 回合）
-    print("\n Starting evaluation...")
+    # Post-training evaluation (no rendering, 10 episodes)
+    print("\nStarting evaluation...")
     evaluate_policy(
         net,
         make_env_fn=lambda render=False: make_env(render),
         episodes=10,
         render=False,
-        record_dir=None,   # 想录视频就给个文件夹，比如 "videos/eval_001"
+        record_dir=None,  # set to "videos/eval_001" to record
         seed=123
     )
