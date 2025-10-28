@@ -26,7 +26,7 @@ from utils.object_util import (
     check_object_in_goal
 )
 
-from utils.robot_util1 copy import (
+from utils.robot_util1 import (
     execute_pick_and_place,
     execute_push
 )
@@ -448,6 +448,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """Clean up environment resources."""
         self.sim.close()
         print("\nEnvironment closed.")
+
 
 
 
