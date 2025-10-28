@@ -1,6 +1,16 @@
 # Run with "python -m scripts.ppo_scratch_v2_fixed"
 
-# ppo_scratch.py
+# ===================================================================
+# PPO FROM SCRATCH — ANNOTATED FOR ME5418 PROJECT (GROUP 21)
+# Hierarchical RL for Multi-attribute Object Manipulation
+# ===================================================================
+# Project Goal: Learn joint-space control of push/grasp strategies
+# Environment: StrategicPushAndGraspEnv (4-DOF arm, cluttered table)
+# Action: Unified 4D vector A = (α_skill, α_x, α_y, α_θ) ∈ [-1,1]^4
+# High-Level Primitives: execute_pick_and_place() or execute_push()
+# Low-Level Control: Handled by pre-programmed IK + motion planners
+# ===================================================================
+
 import os
 import time
 import math
@@ -15,7 +25,7 @@ from torch.distributions import Normal
 
 import gymnasium as gym
 
-# --- progress utils ---
+# --------------------- UTILITY: Time Formatting ---------------------
 def _fmt_secs(s: float) -> str:
     s = max(0, float(s))
     h = int(s // 3600); s -= 3600*h
@@ -23,15 +33,23 @@ def _fmt_secs(s: float) -> str:
     return f"{h:02d}:{m:02d}:{int(s):02d}"
 
 
-# ====== Import your environment ======
+# ====== IMPORT YOUR CUSTOM ENVIRONMENT ==============================
+# This is where your StrategicPushAndGraspEnv is defined
+# Must implement:
+#   - observation_space: full state (robot + objects + spatial relations)
+#   - action_space: Box(-1,1, shape=(4,)) → (α_skill, α_x, α_y, α_θ)
+#   - step(): executes high-level primitive via pre-programmed functions
+#   - reset(): randomizes object positions, shapes, goal zones
 from envs.strategic_env import StrategicPushAndGraspEnv
-# ==================================================
 
-# Reward Normalizer
+# ==================== REWARD NORMALIZATION =========================
+# CRITICAL FOR STABILITY in sparse/reward-scale-varying tasks
+# Your rewards: +5 per object, +25 bonus, small penalties
+# Without normalization → PPO oscillates wildly
 class RewardNormalizer:
     """
-    Running normalization of rewards to stabilize training.
-    This is the MOST IMPORTANT fix for reducing oscillation (80% improvement).
+    Online running mean/std normalization of rewards.
+    Uses Welford's algorithm + return tracking for stability.
     """
     def __init__(self, gamma=0.99, epsilon=1e-8):
         self.mean = 0.0
@@ -41,16 +59,16 @@ class RewardNormalizer:
         self.returns = 0.0
         
     def update(self, reward):
-        """Update running statistics with new reward"""
+        """Update running stats using current (normalized) reward."""
         self.returns = reward + self.gamma * self.returns
         self.count += 1
         delta = self.returns - self.mean
         self.mean += delta / self.count
         delta2 = self.returns - self.mean
-        self.var += delta * delta2
+        self.var += delta * delta2 #incremental variance
         
     def normalize(self, reward):
-        """Normalize single reward"""
+        """Z-score normalize reward using running stats."""
         std = np.sqrt(self.var / self.count)
         return reward / (std + 1e-8)
     
@@ -59,19 +77,36 @@ class RewardNormalizer:
         self.returns = 0.0
 
 
-# ---- Utility: squash action to [-1,1] with tanh and correct log_prob ----
+# ============ ACTION SQUASHING + LOG PROB CORRECTION ===============
+# PPO needs correct log_prob under tanh squashing
+# Without Jacobian correction → biased policy gradient
+
 def squash_action_and_log_prob(mu, std, raw_action=None, eps=1e-4):  # FIXED: increased eps from 1e-6
+    """
+    Sample action ~ N(mu, std), squash to [-1,1] via tanh,
+    and compute log_prob with change-of-variables correction.
+    """
+    
     dist = Normal(mu, std)
     if raw_action is None:
         raw_action = dist.rsample()   # reparameterization
     log_prob = dist.log_prob(raw_action).sum(-1, keepdim=True)
-    # tanh squash
+    
+    # Apply tanh: a = tanh(x)
     action = torch.tanh(raw_action)
-    # change of variables: log|det d(tanh)/dx| = sum log(1 - tanh(x)^2)
+    
+    # Jacobian: log|d(tanh(x))/dx| = log(1 - tanh(x)^2)
+    # We subtract it → correct log density under transformation
     log_prob -= torch.log(1 - action.pow(2) + eps).sum(-1, keepdim=True)
     return action, log_prob, raw_action
 
-# ---- Network ----
+# ===================== ACTOR-CRITIC NETWORK ========================
+# Matches your proposal:
+# - Object encoder → 64D per object
+# - Robot encoder → 128D
+# - Cross-attention fusion → 256D scene
+# → Here simplified into shared MLP backbone (can be extended)
+
 class ActorCritic(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_size=256, num_layers=2, activation="tanh"):
         super().__init__()
@@ -87,6 +122,7 @@ class ActorCritic(nn.Module):
 
         Act = _act_factory(activation)
 
+        # Shared backbone (can later add per-object MLPs + attention)
         layers = []
         in_dim = obs_dim
         for _ in range(num_layers):
@@ -95,10 +131,14 @@ class ActorCritic(nn.Module):
             in_dim = hidden_size
         self.backbone = nn.Sequential(*layers)
 
+        # Policy head: mean of Gaussian (before tanh)
         self.mu_head = nn.Linear(hidden_size, act_dim)
+        # Learnable log_std (shared across actions)
         self.logstd = nn.Parameter(torch.zeros(act_dim))
+        # Value head: V(s)
         self.v_head = nn.Linear(hidden_size, 1)
 
+        # Xavier init for stability
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
@@ -112,12 +152,13 @@ class ActorCritic(nn.Module):
         return mu, std, v
 
     def act(self, obs):
+        """Sample action during rollout."""
         mu, std, v = self.forward(obs)
         a, logp, raw = squash_action_and_log_prob(mu, std)
         return a, logp, v, mu, std, raw
 
     def evaluate_actions(self, obs, raw_actions):
-        """Given obs and raw_actions (before tanh), recompute log_prob for PPO ratio"""
+        """Recompute logp, entropy, v for PPO update (given old raw actions)."""
         mu, std, v = self.forward(obs)
         dist = Normal(mu, std)
         logp = dist.log_prob(raw_actions).sum(-1, keepdim=True)
@@ -127,7 +168,8 @@ class ActorCritic(nn.Module):
         entropy = dist.entropy().sum(-1, keepdim=True)
         return logp, entropy, v
 
-# ---- Rollout Buffer (on-policy) ----
+# ====================== ROLLOUT BUFFER =============================
+# On-policy buffer storing transitions for PPO update
 class RolloutBuffer:
     def __init__(self, size, obs_dim, act_dim, device):
         self.size = size
@@ -135,6 +177,7 @@ class RolloutBuffer:
         self.ptr = 0
         self.full = False
 
+        # Pre-allocate tensors
         self.obs   = torch.zeros((size, obs_dim), dtype=torch.float32, device=device)
         self.raw_a = torch.zeros((size, act_dim), dtype=torch.float32, device=device) # before tanh
         self.a     = torch.zeros((size, act_dim), dtype=torch.float32, device=device) # after tanh
@@ -161,20 +204,22 @@ class RolloutBuffer:
             self.ptr = 0
 
     def compute_gae(self, last_v, gamma=0.99, lam=0.95):
+        """Generalized Advantage Estimation (GAE-λ)"""
         T = self.size if self.full else self.ptr
         adv = torch.zeros((T, 1), device=self.device)
         gae = 0.0
         for t in reversed(range(T)):
             nonterminal = 1.0 - self.done[t]
             next_v = last_v if t == T-1 else self.v[t+1]
-            delta = self.r[t] + gamma*next_v*nonterminal - self.v[t]
-            gae = delta + gamma*lam*nonterminal*gae
+            delta = self.r[t] + gamma * next_v * nonterminal - self.v[t]
+            gae = delta + gamma * lam * nonterminal * gae
             adv[t] = gae
         ret = adv + self.v[:T]
         self.adv[:T] = adv
         self.ret[:T] = ret
 
     def get(self, batch_size):
+        """Yield shuffled mini-batches for PPO update."""
         T = self.size if self.full else self.ptr
         idx = torch.randperm(T, device=self.device)
         for start in range(0, T, batch_size):
@@ -190,62 +235,62 @@ class RolloutBuffer:
                 self.ret[mb],
             )
 
-# ---- Configuration ----
+# ========================= CONFIGURATION ===========================
 @dataclass
 class PPOConfig:
     total_steps: int = 200_000
-    rollout_steps: int = 8192
-    update_epochs: int = 4
-    mini_batch: int = 512
+    rollout_steps: int = 8192        # Steps per PPO update
+    update_epochs: int = 4           # Epochs over buffer
+    mini_batch: int = 512            # Mini-batch size
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_eps: float = 0.2
-    vf_coef: float = 1.0
-    ent_coef_start: float = 0.01
-    ent_coef_end: float = 0.001
+    vf_coef: float = 1.0             # Value loss weight
+    ent_coef_start: float = 0.01     # High → explore
+    ent_coef_end: float = 0.001      # Low → exploit
     lr: float = 3e-4
     max_grad_norm: float = 0.5
     use_lr_schedule: bool = True
     lr_min: float = 1e-5
-    target_kl: float = 0.02
+    target_kl: float = 0.02          # Early stopping if KL too high
     normalize_rewards: bool = True
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 42
 
-    # Network architecture parameters
+    # Network settings (matches proposal: 256D, 2 layers, tanh)
     hidden_size: int = 256
     num_layers: int = 2
     activation: str = "tanh"
 
 
-# ====== MISSING FUNCTION 1: get_entropy_coef ======
+# ====== FUNCTION 1: get_entropy_coef ======
 def get_entropy_coef(current_step, total_steps, start_coef, end_coef):
     """
-    Linearly decay entropy coefficient from start_coef to end_coef over training.
-    This encourages exploration early and exploitation later.
+    Linear decay: encourages exploration early, exploitation late.
+    Critical for discovering push-before-grasp sequences.
     """
     progress = min(1.0, current_step / total_steps)
     return start_coef + (end_coef - start_coef) * progress
 
 
-# ====== MISSING FUNCTION 2: make_env ======
+# ====== FUNCTION 2: make_env ======
 def make_env(render=False):
     """
-    Factory function to create the environment.
-    Args:
-        render: If True, create environment with rendering enabled
-    Returns:
-        env: Gymnasium environment instance
+    Create custom StrategicPushAndGraspEnv.
+    Must expose:
+      - Full state observability (as in proposal)
+      - Action: 4D continuous vector
+      - Reward: shaped as defined
     """
     render_mode = "human" if render else None
     env = StrategicPushAndGraspEnv(render_mode=render_mode)
     return env
 
 
-# ====== MISSING FUNCTION 3: ppo_train ======
+# ====== FUNCTION 3: ppo_train ======
 def ppo_train(cfg: PPOConfig):
     """
-    Main PPO training loop
+    Main PPO training loop — fully on-policy, GAE, clipped objective.
     """
     # ====== Setup ======
     torch.manual_seed(cfg.seed)
