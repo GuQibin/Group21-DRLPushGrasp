@@ -13,6 +13,8 @@ from torch.distributions import Normal
 
 import gymnasium as gym
 
+import time
+
 # ====== 引入你的环境（按你的工程结构改这两行）======
 # from envs.strategic_pushgrasp_env import StrategicPushAndGraspEnv
 from envs.strategic_env import StrategicPushAndGraspEnv
@@ -170,7 +172,7 @@ class PPOConfig:
 
 def make_env(render=False):
     # 你可以在这里切换 single_object_demo 或其它 options
-    env = StrategicPushAndGraspEnv(render_mode="human" if render else None)
+    env = StrategicPushAndGraspEnv(render_mode="human" if render else 'rgb_array')
     return env
 
 def ppo_train(cfg=PPOConfig()):
@@ -178,11 +180,21 @@ def ppo_train(cfg=PPOConfig()):
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
 
+    # === 打印模型参数配置 ===
+    print("\n================ PPO CONFIGURATION ================")
+    for k, v in vars(cfg).items():
+        print(f"{k:<20}: {v}")
+    print("===================================================")
+    time.sleep(2)
+
     env = make_env(render=False)
     obs, _ = env.reset(seed=cfg.seed)
 
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
+
+    print(f"\n[ENV INFO] obs_dim = {obs_dim}, act_dim = {act_dim}")
+    time.sleep(2)
 
     net = ActorCritic(
     obs_dim,
@@ -230,8 +242,9 @@ def ppo_train(cfg=PPOConfig()):
 
             if done_flag > 0.5:
                 # 终止/截断就 reset
+                print(f"[Episode End] Return={ep_ret:.3f}, Length={ep_len}")
+                time.sleep(2)
                 obs, _ = env.reset()
-                print(f"[Episode] return={ep_ret:.2f}, len={ep_len}")
                 ep_ret, ep_len = 0.0, 0
 
         # ====== GAE / Return ======
@@ -271,7 +284,9 @@ def ppo_train(cfg=PPOConfig()):
 
         # 小结
         approx_kl = (mb_logp_old - new_logp).mean().item()
-        print(f"[Update] steps={global_steps}  KL≈{approx_kl:.4f}")
+        print(f"[Update] Steps={global_steps} | Loss={loss.item():.5f} | KL={approx_kl:.5f}")
+        time.sleep(5)
+
 
     env.close()
     return net
