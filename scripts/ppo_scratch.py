@@ -274,7 +274,7 @@ def get_entropy_coef(current_step, total_steps, start_coef, end_coef):
 
 
 # ====== FUNCTION 2: make_env ======
-def make_env(render=False):
+def make_env(render=True):#cong add
     """
     Create custom StrategicPushAndGraspEnv.
     Must expose:
@@ -298,7 +298,7 @@ def ppo_train(cfg: PPOConfig):
     random.seed(cfg.seed)
 
     # Create environment
-    env = make_env(render=False)
+    env = make_env(render=True)#cong add
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
 
@@ -527,7 +527,7 @@ def ppo_train(cfg: PPOConfig):
 
 
 # ====== Evaluation: run deterministic policy for several episodes ======
-def evaluate_policy(net, make_env_fn, episodes=10, render=False, record_dir=None, seed=123):
+def evaluate_policy(net, make_env_fn, episodes=10, render=True, record_dir=None, seed=123):#cong add
     """
     Args:
         net: trained ActorCritic
@@ -642,9 +642,9 @@ if __name__ == "__main__":
     print("\nStarting evaluation...")
     evaluate_policy(
         net,
-        make_env_fn=lambda render=False: make_env(render),
+        make_env_fn=lambda render=True: make_env(render), #cong add
         episodes=10,
-        render=False,
+        render=True, #cong add
         record_dir=None,  # set to "videos/eval_001" to record
         seed=123
     )
