@@ -614,7 +614,8 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=False, record_dir=None
 
 if __name__ == "__main__":
     cfg = PPOConfig(
-        total_steps=200_000,
+        #total_steps=200_000,
+        total_steps=200,
         rollout_steps=8192,
         update_epochs=4,
         mini_batch=512,
@@ -633,7 +634,7 @@ if __name__ == "__main__":
         device="cuda" if torch.cuda.is_available() else "cpu",
         seed=42,
         hidden_size=256,
-        num_layers=2,
+        num_layers=4,
         activation="tanh"   
     )
     net = ppo_train(cfg)
