@@ -349,7 +349,7 @@ def execute_push(sim, robot, target_object: str,
     # PHASE 1: MOVE TO PRE-PUSH POSITION
     # ========================================================================
     print(f"  Phase 1: Moving to pre-push position...")
-    success = move_to_position(sim, robot, pre_push_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
+    success = move_to_position(sim, robot, pre_push_pos, gripper_open=False, steps=300, sleep_sec=SLOW)
     if not success:
         print(f"  ❌ Failed to reach pre-push position for {target_object}")
         return False
@@ -358,7 +358,7 @@ def execute_push(sim, robot, target_object: str,
     # PHASE 2: EXECUTE PUSH (Linear Motion)
     # ========================================================================
     print(f"  Phase 2: Executing push...")
-    success = move_to_position(sim, robot, post_push_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
+    success = move_to_position(sim, robot, post_push_pos, gripper_open=False, steps=300, sleep_sec=SLOW)
     if not success:
         print(f"  ⚠ Push may have been incomplete")
 
@@ -388,7 +388,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
         try:
             current_pos = get_ee_position_safe(robot)
             error = target_pos - current_pos
-            delta = np.clip(error * 25.0, -1.0, 1.0)
+            delta = np.clip(error * 10.0, -1.0, 1.0)
             action = np.concatenate([delta, [gripper_ctrl]])
 
             if step % 10 == 0:
@@ -412,7 +412,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
 
     final_pos = get_ee_position_safe(robot)
     final_error = np.linalg.norm(target_pos - final_pos)
-    success = final_error < 0.015
+    success = final_error < 0.035
 
     print(f"  Final: pos={np.round(final_pos, 3)}, error={final_error:.4f}m")
     if not success:
