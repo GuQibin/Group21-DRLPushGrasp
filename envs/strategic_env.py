@@ -541,7 +541,6 @@
 #         return obs
 
 
-
 #     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
 #         """
 #         Reset the environment to an initial state for a new episode.
@@ -687,7 +686,6 @@
 #         self.previous_joint_positions = self.robot.get_obs()[:7]
 #         self.episode_step = 0
 #         return self._get_obs(), {}
-
 
 
 #     def _spawn_object(self, body_name: str, object_type: str, position: np.ndarray):
@@ -1014,7 +1012,7 @@
 #     def close(self):
 #         """
 #         Clean up environment resources.
-        
+
 #         Called at the end of training or evaluation to properly shut down
 #         PyBullet simulation and free resources.
 #         """
@@ -1034,16 +1032,6 @@
 #         typ = meta.get("type", "unknown")
 #         non_graspable_types = {"sphere"}  # Types that should not (or are hard to) be grasped
 #         return is_occluded or (typ in non_graspable_types)
-
-
-
-
-
-
-
-
-
-
 
 
 # 现在有错误的版本
@@ -1087,16 +1075,17 @@ from utils.physics_util import (
     check_object_collision
 )
 
+
 # ======================================================================
 # EXPLORATION BONUS (GLOBAL)
 # ======================================================================
 def compute_exploration_bonus(
-    global_steps: int,
-    total_steps: int,
-    collected_count: int,
-    total_objects: int,
-    current_target: str,
-    objects: dict
+        global_steps: int,
+        total_steps: int,
+        collected_count: int,
+        total_objects: int,
+        current_target: str,
+        objects: dict
 ) -> float:
     if total_objects == 0:
         return 0.0
@@ -1122,11 +1111,12 @@ def compute_exploration_bonus(
     size_factor = min(total_objects / 5.0, 2.0)
     total_bonus = (base_bonus + milestone_bonus + hard_bonus) * size_factor
     return round(float(total_bonus), 3)
-    
+
+
 class StrategicPushAndGraspEnv(gym.Env):
     """
     Strategic Push-Grasp Environment with FIXED target selection handling.
-    
+
     CRITICAL CHANGES FROM ORIGINAL:
     - Robust handling of "No Target Selected" scenario
     - Objects that fall off workspace are marked as collected
@@ -1137,9 +1127,9 @@ class StrategicPushAndGraspEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
     # Color constants for visual feedback
-    COLOR_GREEN = [0.1, 0.8, 0.1, 1.0]   # Graspable cubes
+    COLOR_GREEN = [0.1, 0.8, 0.1, 1.0]  # Graspable cubes
     COLOR_YELLOW = [0.8, 0.8, 0.1, 1.0]  # Spheres
-    COLOR_RED = [0.8, 0.1, 0.1, 1.0]     # Occluded objects
+    COLOR_RED = [0.8, 0.1, 0.1, 1.0]  # Occluded objects
 
     # Environment parameters
     MAX_OBJECTS = 10
@@ -1163,17 +1153,17 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.current_target = None
         self.action_was_successful = False
         self.scene_setup = False
-        
+
         # Episode tracking
         self.episode_step = 0
         self.max_episode_steps = 100
-        
+
         # Reward shaping variables
         self.previous_joint_positions = None
         self.previous_object_distances = {}
         self.previous_occlusion_states = {}
         self._prev_distance_to_target = None
-        
+
         # Goal zone
         self.goal_pos = np.array([0.15, 0.15], dtype=np.float32)
         self.goal_size = 0.12
@@ -1182,7 +1172,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         # === TRAINING PROGRESS ===
         self.global_steps = 0
         self.total_training_steps = 200_000
-        
+
         # Define action and observation spaces
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
         obs_dim = 22 + 6 + (self.MAX_OBJECTS * 21) + (self.MAX_OBJECTS * self.MAX_OBJECTS) + self.MAX_OBJECTS
@@ -1194,11 +1184,11 @@ class StrategicPushAndGraspEnv(gym.Env):
 
     def set_global_steps(self, steps: int):
         self.global_steps = steps
-        
+
     def _remove_object(self, body_name: str, mark_as_collected: bool = True):
         """
         FIXED: Remove object and optionally mark as collected to prevent re-selection.
-        
+
         Args:
             body_name: Name of object to remove
             mark_as_collected: If True, add to collected_objects set
@@ -1232,7 +1222,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         """
         newly_collected_count = 0
         objects_to_remove = []
-        
+
         for obj_name in list(self.objects.keys()):
             if obj_name not in self.collected_objects:
                 obj_pos = self.sim.get_base_position(obj_name)
@@ -1251,7 +1241,7 @@ class StrategicPushAndGraspEnv(gym.Env):
     def _validate_and_select_target(self) -> Optional[str]:
         """
         FIXED: Robust target selection with validation.
-        
+
         Returns:
             Valid target object name, or None if no valid targets exist
         """
@@ -1269,18 +1259,19 @@ class StrategicPushAndGraspEnv(gym.Env):
             self.current_target = select_target_heuristic(
                 self.sim, self.objects, self.goal_pos, self.collected_objects
             )
-            
+
             if self.current_target is not None:
                 print(f"🎯 Selected target: {self.current_target}")
             else:
-                print(f"⚠️ No valid targets available (objects={len(self.objects)}, collected={len(self.collected_objects)})")
+                print(
+                    f"⚠️ No valid targets available (objects={len(self.objects)}, collected={len(self.collected_objects)})")
 
         return self.current_target
 
     def step(self, action: np.ndarray):
         """
         FIXED: Execute environment step with robust target handling.
-        
+
         Key improvements:
         1. Validates target before action execution
         2. Auto-terminates episode if no targets remain
@@ -1290,26 +1281,26 @@ class StrategicPushAndGraspEnv(gym.Env):
         # Parse action vector
         a_skill, alpha_x, alpha_y, alpha_theta = action
         action_type = "grasp" if a_skill > 0 else "push"
-        
+
         # ==================================================================
         # FIX 1: VALIDATE TARGET BEFORE ACTION EXECUTION
         # ==================================================================
         self._validate_and_select_target()
-        
+
         if self.current_target is None:
             # No valid targets - this should trigger episode termination
             self.action_was_successful = False
             print(f"⚠️ No target selected - marking action as failed")
-            
+
             # Give small negative reward but don't penalize heavily
             # (not the agent's fault if no objects remain)
             obs = self._get_obs()
             reward = -0.5  # Small penalty instead of -3
-            
+
             # Auto-terminate episode when no targets available
             terminated = True
             truncated = False
-            
+
             info = {
                 "is_success": False,
                 "collected": len(self.collected_objects),
@@ -1319,7 +1310,7 @@ class StrategicPushAndGraspEnv(gym.Env):
                 "episode_step": self.episode_step,
                 "termination_reason": "no_valid_targets"
             }
-            
+
             return obs, float(reward), bool(terminated), truncated, info
 
         # ==================================================================
@@ -1413,11 +1404,11 @@ class StrategicPushAndGraspEnv(gym.Env):
         # ==================================================================
         total_objects_at_start = len(self.objects) + len(self.collected_objects)
         terminated = False
-        
+
         # Success: collected 95% or more
         if total_objects_at_start > 0:
             terminated = len(self.collected_objects) >= total_objects_at_start * 0.95
-        
+
         # Also terminate if no valid targets remain (prevents getting stuck)
         if not terminated and self.current_target is None and len(self.objects) > 0:
             terminated = True
@@ -1538,18 +1529,10 @@ class StrategicPushAndGraspEnv(gym.Env):
         typ = meta.get("type", "unknown")
         non_graspable_types = {"sphere"}
         return is_occluded or (typ in non_graspable_types)
-    
+
     def close(self):
         """Clean up environment resources."""
         self.sim.close()
-
-
-
-
-
-
-
-
 
     def _get_robot_state(self) -> Dict[str, np.ndarray]:
         robot_obs = self.robot.get_obs()
@@ -1579,10 +1562,10 @@ class StrategicPushAndGraspEnv(gym.Env):
                 ee_quat = np.array(link_state[1], dtype=np.float32)
             else:
                 ee_pos = np.zeros(3, dtype=np.float32)
-                ee_quat = np.array([0,0,0,1], dtype=np.float32)
+                ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
         except Exception:
             ee_pos = np.zeros(3, dtype=np.float32)
-            ee_quat = np.array([0,0,0,1], dtype=np.float32)
+            ee_quat = np.array([0, 0, 0, 1], dtype=np.float32)
 
         return {
             'joint_positions': joint_positions,
@@ -1592,24 +1575,23 @@ class StrategicPushAndGraspEnv(gym.Env):
             'gripper_width': np.array([np.mean(gripper_state)], dtype=np.float32),
         }
 
-
     def _get_object_states(self) -> Dict[str, np.ndarray]:
         object_names = sorted(self.objects.keys())
         N = len(object_names)
         if N == 0:
             return {
-                'positions': np.array([]).reshape(0,3),
-                'orientations': np.array([]).reshape(0,4),
-                'velocities': np.array([]).reshape(0,3),
-                'angular_velocities': np.array([]).reshape(0,3),
-                'shape_descriptors': np.array([]).reshape(0,8),
+                'positions': np.array([]).reshape(0, 3),
+                'orientations': np.array([]).reshape(0, 4),
+                'velocities': np.array([]).reshape(0, 3),
+                'angular_velocities': np.array([]).reshape(0, 3),
+                'shape_descriptors': np.array([]).reshape(0, 8),
             }
 
-        positions = np.zeros((N,3), dtype=np.float32)
-        orientations = np.zeros((N,4), dtype=np.float32)
-        velocities = np.zeros((N,3), dtype=np.float32)
-        angular_velocities = np.zeros((N,3), dtype=np.float32)
-        shape_descriptors = np.zeros((N,8), dtype=np.float32)
+        positions = np.zeros((N, 3), dtype=np.float32)
+        orientations = np.zeros((N, 4), dtype=np.float32)
+        velocities = np.zeros((N, 3), dtype=np.float32)
+        angular_velocities = np.zeros((N, 3), dtype=np.float32)
+        shape_descriptors = np.zeros((N, 8), dtype=np.float32)
 
         for i, name in enumerate(object_names):
             positions[i] = self.sim.get_base_position(name)
@@ -1630,8 +1612,6 @@ class StrategicPushAndGraspEnv(gym.Env):
         distance_matrix = compute_pairwise_distance_matrix(self.sim, self.objects)
         occlusion_mask = compute_occlusion_masks(self.sim, self.objects, threshold=self.OCCLUSION_THRESHOLD)
         return {'distance_matrix': distance_matrix, 'occlusion_mask': occlusion_mask}
-
-
 
     def _get_obs(self) -> np.ndarray:
         # 1) robot (22D)
@@ -1657,11 +1637,11 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         # 3) objects (pad to MAX_OBJECTS × 21)
         objects = self._get_object_states()
-        positions_padded = np.zeros((self.MAX_OBJECTS,3), dtype=np.float32)
-        orientations_padded = np.zeros((self.MAX_OBJECTS,4), dtype=np.float32)
-        velocities_padded = np.zeros((self.MAX_OBJECTS,3), dtype=np.float32)
-        angular_velocities_padded = np.zeros((self.MAX_OBJECTS,3), dtype=np.float32)
-        shape_descriptors_padded = np.zeros((self.MAX_OBJECTS,8), dtype=np.float32)
+        positions_padded = np.zeros((self.MAX_OBJECTS, 3), dtype=np.float32)
+        orientations_padded = np.zeros((self.MAX_OBJECTS, 4), dtype=np.float32)
+        velocities_padded = np.zeros((self.MAX_OBJECTS, 3), dtype=np.float32)
+        angular_velocities_padded = np.zeros((self.MAX_OBJECTS, 3), dtype=np.float32)
+        shape_descriptors_padded = np.zeros((self.MAX_OBJECTS, 8), dtype=np.float32)
         if N > 0:
             positions_padded[:N] = objects['positions']
             orientations_padded[:N] = objects['orientations']
@@ -1681,38 +1661,38 @@ class StrategicPushAndGraspEnv(gym.Env):
         spatial = self._get_spatial_relationships()
         distance_matrix_padded = np.zeros((self.MAX_OBJECTS, self.MAX_OBJECTS), dtype=np.float32)
         if N > 0:
-            distance_matrix_padded[:N,:N] = spatial['distance_matrix']
+            distance_matrix_padded[:N, :N] = spatial['distance_matrix']
         occlusion_mask_padded = np.zeros(self.MAX_OBJECTS, dtype=np.float32)
         if N > 0:
             occlusion_mask_padded[:N] = spatial['occlusion_mask'].astype(np.float32)
 
         obs = np.concatenate([
-            robot_vector,                  # 22
-            env_info,                      # 6
-            object_vector,                 # 210
-            distance_matrix_padded.flatten(), # 100
-            occlusion_mask_padded,         # 10
+            robot_vector,  # 22
+            env_info,  # 6
+            object_vector,  # 210
+            distance_matrix_padded.flatten(),  # 100
+            occlusion_mask_padded,  # 10
         ]).astype(np.float32)
 
         return obs
-    
+
     def _spawn_object(self, body_name: str, object_type: str, position: np.ndarray):
         default_color = self.COLOR_GREEN if object_type == "cube" else self.COLOR_YELLOW
         if object_type == "cube":
-            half_extents = np.array([0.02,0.02,0.02])
+            half_extents = np.array([0.02, 0.02, 0.02])
             self.sim.create_box(body_name=body_name, half_extents=half_extents, mass=1.0,
                                 position=position, rgba_color=default_color)
             shape_desc = compute_shape_descriptors("cube", half_extents=half_extents)
         elif object_type == "sphere":
             radius = 0.02
             self.sim.create_sphere(body_name=body_name, radius=radius, mass=1.0,
-                                position=position, rgba_color=default_color)
+                                   position=position, rgba_color=default_color)
             shape_desc = compute_shape_descriptors("sphere", radius=radius)
 
         body_id = self.sim._bodies_idx.get(body_name)
         if body_id is not None:
             p.changeDynamics(bodyUniqueId=body_id, linkIndex=-1,
-                            lateralFriction=0.8, spinningFriction=0.01, restitution=0.05)
+                             lateralFriction=0.8, spinningFriction=0.01, restitution=0.05)
 
         self.objects[body_name] = {"type": object_type, "is_occluded": False, "shape_descriptor": shape_desc}
         obj_pos = np.array(self.sim.get_base_position(body_name)[:2])
@@ -1720,18 +1700,18 @@ class StrategicPushAndGraspEnv(gym.Env):
 
     def _draw_goal_square(self):
         half = self.goal_size / 2
-        color = [0,1,0]
+        color = [0, 1, 0]
         z = 0.001
         cx, cy = self.goal_pos
         corners = [
-            [cx-half, cy-half, z],
-            [cx+half, cy-half, z],
-            [cx+half, cy+half, z],
-            [cx-half, cy+half, z],
+            [cx - half, cy - half, z],
+            [cx + half, cy - half, z],
+            [cx + half, cy + half, z],
+            [cx - half, cy + half, z],
         ]
         client = self.sim.physics_client
         for i in range(4):
-            client.addUserDebugLine(corners[i], corners[(i+1)%4], color, lineWidth=3)
+            client.addUserDebugLine(corners[i], corners[(i + 1) % 4], color, lineWidth=3)
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
@@ -1739,10 +1719,10 @@ class StrategicPushAndGraspEnv(gym.Env):
             if not self.scene_setup:
                 self.sim.create_box(
                     body_name="table",
-                    half_extents=np.array([0.4,0.4,0.01]),
+                    half_extents=np.array([0.4, 0.4, 0.01]),
                     mass=0.0,
-                    position=np.array([0,0,-0.01]),
-                    rgba_color=np.array([0.8,0.8,0.8,1])
+                    position=np.array([0, 0, -0.01]),
+                    rgba_color=np.array([0.8, 0.8, 0.8, 1])
                 )
                 self.scene_setup = True
 
@@ -1790,12 +1770,13 @@ class StrategicPushAndGraspEnv(gym.Env):
                     self.previous_occlusion_states[name] = self.objects[name]["is_occluded"]
                 update_object_colors(self.sim, self.objects, self.COLOR_GREEN, self.COLOR_YELLOW, self.COLOR_RED)
 
-                self.current_target = select_target_heuristic(self.sim, self.objects, self.goal_pos, self.collected_objects)
+                self.current_target = select_target_heuristic(self.sim, self.objects, self.goal_pos,
+                                                              self.collected_objects)
                 self.previous_joint_positions = self.robot.get_obs()[:7]
                 self.episode_step = 0
                 try:
                     self.sim.physics_client.resetDebugVisualizerCamera(
-                        cameraDistance=1.2, cameraYaw=45, cameraPitch=-35, cameraTargetPosition=[0,0,0]
+                        cameraDistance=1.2, cameraYaw=45, cameraPitch=-35, cameraTargetPosition=[0, 0, 0]
                     )
                 except Exception:
                     pass
