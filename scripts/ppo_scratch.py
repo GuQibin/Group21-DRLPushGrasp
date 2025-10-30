@@ -580,7 +580,11 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=True, record_dir=None,
                 ep_len += 1
 
                 if render and hasattr(env, "render"):
-                    env.render()
+                    try:
+                        env.render()
+                    except NotImplementedError:
+                        pass  # 环境没有实现 render，就跳过
+
 
                 done = terminated or truncated
                 if done:
