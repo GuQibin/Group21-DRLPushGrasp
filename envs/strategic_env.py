@@ -1145,7 +1145,7 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         # Create simulation
         self.sim = PyBullet(render_mode=render_mode, background_color=np.array([200, 220, 230]))
-        self.robot = Panda(self.sim, block_gripper=False, base_position=np.array([0, 0, 0]))
+        self.robot = Panda(self.sim, block_gripper=False, base_position=np.array([-0.5, 0, 0]))
 
         # State tracking
         self.objects = {}
@@ -1165,8 +1165,8 @@ class StrategicPushAndGraspEnv(gym.Env):
         self._prev_distance_to_target = None
 
         # Goal zone
-        self.goal_pos = np.array([0.15, 0.15], dtype=np.float32)
-        self.goal_size = 0.12
+        self.goal_pos = np.array([-0.2, -0.2], dtype=np.float32)
+        self.goal_size = 0.1
         self.table_bounds = np.array([0.4, 0.4], dtype=np.float32)
 
         # === TRAINING PROGRESS ===
@@ -1824,6 +1824,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.previous_joint_positions = self.robot.get_obs()[:7]
         self.episode_step = 0
         return self._get_obs(), {}
+
 
 
 
