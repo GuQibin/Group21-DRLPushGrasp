@@ -1,4 +1,4 @@
-# Run with "python -m scripts.ppo_scratch_v2_fixed"
+# Run with "python -m scripts.ppo_scratch"
 
 # ===================================================================
 # PPO FROM SCRATCH — ANNOTATED FOR ME5418 PROJECT (GROUP 21)
@@ -282,7 +282,7 @@ def make_env(render=False):
       - Action: 4D continuous vector
       - Reward: shaped as defined
     """
-    render_mode = "human" if render else None
+    render_mode = "human" if render else 'rgb_array'
     env = StrategicPushAndGraspEnv(render_mode=render_mode)
     return env
 

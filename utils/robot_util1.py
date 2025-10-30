@@ -2,7 +2,8 @@ import numpy as np
 from typing import Tuple, Optional
 import pybullet as p
 
-SLOW = 1/120
+#SLOW = 1/120
+SLOW = 0
 
 def get_ee_position_safe(robot) -> np.ndarray:
     try:
