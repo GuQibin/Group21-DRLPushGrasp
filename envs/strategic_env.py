@@ -43,26 +43,41 @@ from utils.physics_util import (
 # EXPLORATION BONUS (GLOBAL)
 # ======================================================================
 def compute_exploration_bonus(
-        global_steps: int,
-        total_steps: int,
-        collected_count: int,
-        total_objects: int,
-        current_target: str,
-        objects: dict
+        global_steps: int,       # total training steps completed so far
+        total_steps: int,        # total planned training steps (for scaling)
+        collected_count: int,    # number of objects successfully collected
+        total_objects: int,      # total number of objects in the current scene
+        current_target: str,     # name of the current target object
+        objects: dict            # metadata dictionary for all objects
 ) -> float:
+    """
+    Compute a dynamic exploration bonus based on training progress
+    and task difficulty.
+
+    Purpose:
+    - Encourage exploration early in training.
+    - Give extra rewards at key milestones (e.g., 1st, 3rd object collected).
+    - Provide difficulty-based bonuses for occluded or complex objects.
+    - Gradually decay the bonus as training progresses to avoid over-exploration.
+    """
+
+    # Return 0 if there are no objects in the scene 
     if total_objects == 0:
         return 0.0
 
+    # === 1. Base decaying bonus ===
     decay_steps = 50_000
     progress = min(global_steps / decay_steps, 1.0)
     base_bonus = 2.0 * (1.0 - progress)
 
+    # === 2. Milestone bonus ===
     milestone_bonus = 0.0
     if collected_count == 1:
         milestone_bonus = 3.0
     elif collected_count % 3 == 0:
         milestone_bonus = 1.0
 
+    # === 3. Hardness-based bonus ===
     hard_bonus = 0.0
     if current_target in objects:
         meta = objects[current_target]
@@ -71,8 +86,11 @@ def compute_exploration_bonus(
         if meta.get("is_occluded", False):
             hard_bonus += 0.5 * (1.0 - progress)
 
+    # === 4. Scene size scaling ===
     size_factor = min(total_objects / 5.0, 2.0)
     total_bonus = (base_bonus + milestone_bonus + hard_bonus) * size_factor
+    
+    # Return rounded float value for numerical stability
     return round(float(total_bonus), 3)
 
 
@@ -107,8 +125,12 @@ class StrategicPushAndGraspEnv(gym.Env):
         print("=" * 70)
 
         # Create simulation
-        self.sim = PyBullet(render_mode=render_mode, background_color=np.array([200, 220, 230]))
-        self.robot = Panda(self.sim, block_gripper=False, base_position=np.array([-0.5, 0, 0]))
+        self.sim = PyBullet(render_mode=render_mode)
+        self.robot = Panda(
+            self.sim, 
+            block_gripper=False, 
+            base_position=np.array([-0.5, 0, 0])
+            )
 
         # State tracking
         self.objects = {}
@@ -136,6 +158,9 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.global_steps = 0
         self.total_training_steps = 200_000
 
+        # Add to fix
+        self.total_objects_at_start = 0
+
         # Define action and observation spaces
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
         obs_dim = 22 + 6 + (self.MAX_OBJECTS * 21) + (self.MAX_OBJECTS * self.MAX_OBJECTS) + self.MAX_OBJECTS
@@ -145,8 +170,8 @@ class StrategicPushAndGraspEnv(gym.Env):
         print(f"Observation space: {self.observation_space}")
         print("=" * 70 + "\n")
 
-    def set_global_steps(self, steps: int):
-        self.global_steps = steps
+    # def set_global_steps(self, steps: int):
+    #     self.global_steps = steps
 
     def _remove_object(self, body_name: str, mark_as_collected: bool = True):
         """
@@ -178,6 +203,7 @@ class StrategicPushAndGraspEnv(gym.Env):
             else:
                 print(f"🧹 Object {body_name} removed from scene.")
 
+
     def _check_and_remove_collected_objects(self) -> int:
         """
         FIXED: Check for objects in goal zone and properly track them.
@@ -201,6 +227,7 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         return newly_collected_count
 
+
     def _validate_and_select_target(self) -> Optional[str]:
         """
         FIXED: Robust target selection with validation.
@@ -211,10 +238,10 @@ class StrategicPushAndGraspEnv(gym.Env):
         # First, ensure current target is still valid
         if self.current_target is not None:
             if self.current_target not in self.objects:
-                print(f"⚠️ Current target {self.current_target} no longer exists, re-selecting...")
+                print(f" Current target {self.current_target} no longer exists, re-selecting...")
                 self.current_target = None
             elif self.current_target in self.collected_objects:
-                print(f"⚠️ Current target {self.current_target} already collected, re-selecting...")
+                print(f" Current target {self.current_target} already collected, re-selecting...")
                 self.current_target = None
 
         # Select new target if needed
@@ -227,9 +254,10 @@ class StrategicPushAndGraspEnv(gym.Env):
                 print(f"🎯 Selected target: {self.current_target}")
             else:
                 print(
-                    f"⚠️ No valid targets available (objects={len(self.objects)}, collected={len(self.collected_objects)})")
+                    f" No valid targets available (objects={len(self.objects)}, collected={len(self.collected_objects)})")
 
         return self.current_target
+
 
     def step(self, action: np.ndarray):
         """
@@ -253,7 +281,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         if self.current_target is None:
             # No valid targets - this should trigger episode termination
             self.action_was_successful = False
-            print(f"⚠️ No target selected - marking action as failed")
+            print(f" No target selected - marking action as failed")
 
             # Give small negative reward but don't penalize heavily
             # (not the agent's fault if no objects remain)
@@ -286,7 +314,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         # EXECUTE ACTION PRIMITIVE
         # ==================================================================
         if action_type == "grasp":
-            print(f"\n🤏 Executing PICK-AND-PLACE on {self.current_target}")
+            print(f"\n Executing PICK-AND-PLACE on {self.current_target}")
             self.action_was_successful = execute_pick_and_place(
                 self.sim,
                 self.robot,
@@ -297,7 +325,7 @@ class StrategicPushAndGraspEnv(gym.Env):
                 workspace_bounds=self.WORKSPACE_BOUNDS
             )
         elif action_type == "push":
-            print(f"\n👉 Executing PUSH on {self.current_target}")
+            print(f"\n Executing PUSH on {self.current_target}")
             self.action_was_successful = execute_push(
                 self.sim,
                 self.robot,
@@ -322,7 +350,7 @@ class StrategicPushAndGraspEnv(gym.Env):
                 workspace_penalty = -10.0
                 print(f"✗ Object {obj_name} left workspace! (-10)")
                 # CRITICAL: Mark as collected to prevent re-selection
-                self._remove_object(obj_name, mark_as_collected=True)
+                self._remove_object(obj_name, mark_as_collected=False)
                 break
 
         # ==================================================================
@@ -365,7 +393,11 @@ class StrategicPushAndGraspEnv(gym.Env):
         # ==================================================================
         # CHECK TERMINATION CONDITIONS
         # ==================================================================
-        total_objects_at_start = len(self.objects) + len(self.collected_objects)
+        # total_objects_at_start = len(self.objects) + len(self.collected_objects)
+        
+        # Add to fix
+        total_objects_at_start = self.total_objects_at_start
+        
         terminated = False
 
         # Success: collected 95% or more
@@ -375,7 +407,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         # Also terminate if no valid targets remain (prevents getting stuck)
         if not terminated and self.current_target is None and len(self.objects) > 0:
             terminated = True
-            print(f"⚠️ Episode terminated: no valid targets but {len(self.objects)} objects remain")
+            print(f" Episode terminated: no valid targets but {len(self.objects)} objects remain")
 
         truncated = self.episode_step >= self.max_episode_steps
 
@@ -394,6 +426,7 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         return obs, float(reward), bool(terminated), truncated, info
 
+
     def _compute_complete_reward(self, action_type: str,
                                  current_joints: np.ndarray,
                                  num_newly_collected: int,
@@ -408,13 +441,15 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         # 2. Task completion (+50)
         completion_reward = 0.0
-        total_objects = len(self.objects) + len(self.collected_objects)
-        if total_objects > 0:
-            completion_threshold = total_objects * 0.60
+        # total_objects = len(self.objects) + len(self.collected_objects)
+        # Add to fix
+        total_objects_at_start = self.total_objects_at_start
+        if total_objects_at_start > 0:
+            completion_threshold = total_objects_at_start * 0.60
             prev_collected_count = len(self.collected_objects) - num_newly_collected
             if prev_collected_count < completion_threshold and len(self.collected_objects) >= completion_threshold:
                 completion_reward = 50.0
-                print(f"✓ Task completed! {len(self.collected_objects)}/{total_objects} objects (+25)")
+                print(f"✓ Task completed! {len(self.collected_objects)}/{total_objects_at_start} objects (+50)")
         reward_info['completion'] = completion_reward
 
         # 3. Successful push (+1.0)
@@ -431,12 +466,14 @@ class StrategicPushAndGraspEnv(gym.Env):
                 now_occluded = self.objects[self.current_target]["is_occluded"]
                 occlusion_cleared = was_occluded and not now_occluded
 
-                if distance_reduced or occlusion_cleared:
-                    push_success_reward = 1.0
-                    if distance_reduced:
-                        print(f"✓ Push moved object closer ({previous_dist:.3f}→{current_dist:.3f}m) (+0.5)")
-                    if occlusion_cleared:
-                        print(f"✓ Push cleared occlusion (+0.5)")
+                reward_from_distance = 0.5 if distance_reduced else 0.0
+                reward_from_occlusion = 0.5 if occlusion_cleared else 0.0
+                push_success_reward = reward_from_distance + reward_from_occlusion
+
+                if distance_reduced:
+                    print(f" Push moved object closer ({previous_dist:.3f}→{current_dist:.3f}m) (+0.5)")
+                if occlusion_cleared:
+                    print(f" Push cleared occlusion (+0.5)")
 
                 self.previous_object_distances[self.current_target] = current_dist
 
@@ -509,11 +546,20 @@ class StrategicPushAndGraspEnv(gym.Env):
                     joint_velocities[i] = self.sim.get_joint_velocity("panda", i)
                 except:
                     joint_velocities[i] = 0.0
+        print(f"len(robot_obs):{len(robot_obs)} ")
+        print(f"len(robot_obs)len(robot_obs)len(robot_obs)len(robot_obs)len(robot_obs)len(robot_obs)len(robot_obs)len(robot_obs)")
+        
+        # if len(robot_obs) >= 9:
+        #     gripper_state = np.array(robot_obs[7:9], dtype=np.float32)
+        # else:
+        #     gripper_state = np.zeros(2, dtype=np.float32)
 
-        if len(robot_obs) >= 9:
-            gripper_state = np.array(robot_obs[7:9], dtype=np.float32)
-        else:
-            gripper_state = np.zeros(2, dtype=np.float32)
+         # Add to fix
+        try:
+            width = float(self.robot.get_fingers_width())
+        except Exception:
+            width = 0.0
+        gripper_state = np.array([width], dtype=np.float32)
 
         ee_link = getattr(self.robot, 'ee_link', 11)
         try:
@@ -538,9 +584,22 @@ class StrategicPushAndGraspEnv(gym.Env):
             'gripper_width': np.array([np.mean(gripper_state)], dtype=np.float32),
         }
 
+
     def _get_object_states(self) -> Dict[str, np.ndarray]:
+        """
+        Collect and return the physical state of all active objects in the scene.
+
+        Returns a dictionary containing each object's:
+        - position (x, y, z)
+        - orientation (quaternion)
+        - linear velocity
+        - angular velocity
+        - precomputed shape descriptor
+        """
         object_names = sorted(self.objects.keys())
         N = len(object_names)
+
+        # If no objects exist, return empty arrays with correct shapes
         if N == 0:
             return {
                 'positions': np.array([]).reshape(0, 3),
@@ -571,10 +630,19 @@ class StrategicPushAndGraspEnv(gym.Env):
             'shape_descriptors': shape_descriptors,
         }
 
+
     def _get_spatial_relationships(self) -> Dict[str, np.ndarray]:
+        """
+        Compute pairwise spatial relationships between objects.
+
+        Returns:
+        - 'distance_matrix': pairwise Euclidean distances between object centers
+        - 'occlusion_mask': boolean mask indicating which objects are occluded
+        """
         distance_matrix = compute_pairwise_distance_matrix(self.sim, self.objects)
         occlusion_mask = compute_occlusion_masks(self.sim, self.objects, threshold=self.OCCLUSION_THRESHOLD)
         return {'distance_matrix': distance_matrix, 'occlusion_mask': occlusion_mask}
+
 
     def _get_obs(self) -> np.ndarray:
         # 1) robot (22D)
@@ -639,7 +707,18 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         return obs
 
+
     def _spawn_object(self, body_name: str, object_type: str, position: np.ndarray):
+        """
+        Spawn a single object (cube or sphere) into the simulation with default physical properties.
+
+        Args:
+            body_name: unique name of the object in the simulator
+            object_type: 'cube' or 'sphere'
+            position: 3D spawn position [x, y, z]
+        """
+
+        # Choose color based on object type
         default_color = self.COLOR_GREEN if object_type == "cube" else self.COLOR_YELLOW
         if object_type == "cube":
             half_extents = np.array([0.02, 0.02, 0.02])
@@ -652,16 +731,23 @@ class StrategicPushAndGraspEnv(gym.Env):
                                    position=position, rgba_color=default_color)
             shape_desc = compute_shape_descriptors("sphere", radius=radius)
 
+        # Set physics properties (friction, restitution, etc.)
         body_id = self.sim._bodies_idx.get(body_name)
         if body_id is not None:
             p.changeDynamics(bodyUniqueId=body_id, linkIndex=-1,
                              lateralFriction=0.8, spinningFriction=0.01, restitution=0.05)
 
         self.objects[body_name] = {"type": object_type, "is_occluded": False, "shape_descriptor": shape_desc}
+       
+        # Store the initial distance to the goal (for reward computation)
         obj_pos = np.array(self.sim.get_base_position(body_name)[:2])
         self.previous_object_distances[body_name] = np.linalg.norm(obj_pos - self.goal_pos)
 
+
     def _draw_goal_square(self):
+        """
+        Draw a green square outline on the table to visualize the goal zone.
+        """
         half = self.goal_size / 2
         color = [0, 1, 0]
         z = 0.001
@@ -676,9 +762,20 @@ class StrategicPushAndGraspEnv(gym.Env):
         for i in range(4):
             client.addUserDebugLine(corners[i], corners[(i + 1) % 4], color, lineWidth=3)
 
+
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        """
+        Reset the environment state and (re)build the scene.
+
+        Supports two modes:
+        1) Single-object demo (options['single_object_demo']=True)
+        2) Standard multi-object scene (default)
+        """
         super().reset(seed=seed)
+
+        # Disable rendering for faster/batch-safe reset
         with self.sim.no_rendering():
+            # One-time scene setup: create the table
             if not self.scene_setup:
                 self.sim.create_box(
                     body_name="table",
@@ -689,6 +786,7 @@ class StrategicPushAndGraspEnv(gym.Env):
                 )
                 self.scene_setup = True
 
+            # Remove all existing dynamic objects
             for body_name in list(self.objects.keys()):
                 body_id = self.sim._bodies_idx.get(body_name)
                 if body_id is not None:
@@ -696,27 +794,31 @@ class StrategicPushAndGraspEnv(gym.Env):
             self.objects.clear()
             self.collected_objects.clear()
 
+            # Clear per-episode trackers
             self.previous_joint_positions = None
             self.previous_object_distances.clear()
             self.previous_occlusion_states.clear()
 
-            # 清一次 debug 线，避免目标区域重复
+            # Clear debug lines (avoid duplicated goal outline)
             try:
                 self.sim.physics_client.removeAllUserDebugItems()
             except Exception:
                 pass
 
+            # Redraw goal outline and reset the robot
             self._draw_goal_square()
             self.robot.reset()
 
-            # 单物体演示分支（保持与原版一致）
+            # ---------- Mode 1: Single-object demo ----------
             if options and options.get("single_object_demo", False):
+                # Allow overriding goal position/size
                 if "goal_pos" in options:
                     self.goal_pos = np.array(options["goal_pos"], dtype=np.float32)
                 if "goal_size" in options:
                     self.goal_size = float(options["goal_size"])
                 self._draw_goal_square()
 
+                # Spawn exactly one object at a specified XY (Z from size)
                 obj_type = options.get("object_type", "cube")
                 obj_xy = np.array(options.get("object_pos", [0.45, 0.00]), dtype=np.float32)
                 if obj_type == "cube":
@@ -728,30 +830,40 @@ class StrategicPushAndGraspEnv(gym.Env):
                     spawn_pos = np.array([obj_xy[0], obj_xy[1], radius], dtype=np.float32)
                     self._spawn_object("object_0", "sphere", spawn_pos)
 
+                # Analyze occlusions and color-code objects
                 analyze_scene_occlusions(self.sim, self.objects, self.OCCLUSION_THRESHOLD)
                 for name in self.objects:
                     self.previous_occlusion_states[name] = self.objects[name]["is_occluded"]
                 update_object_colors(self.sim, self.objects, self.COLOR_GREEN, self.COLOR_YELLOW, self.COLOR_RED)
 
-                self.current_target = select_target_heuristic(self.sim, self.objects, self.goal_pos,
-                                                              self.collected_objects)
+                # Add to fix
+                # Record start count for success metrics
+                self.total_objects_at_start = len(self.objects)
+
+                # Select initial target and init episode counters
+                self.current_target = select_target_heuristic(self.sim, self.objects, self.goal_pos, self.collected_objects)
                 self.previous_joint_positions = self.robot.get_obs()[:7]
                 self.episode_step = 0
+
+                # Optional: set a helpful camera view
                 try:
                     self.sim.physics_client.resetDebugVisualizerCamera(
                         cameraDistance=1.2, cameraYaw=45, cameraPitch=-35, cameraTargetPosition=[0, 0, 0]
                     )
                 except Exception:
                     pass
+
                 return self._get_obs(), {}
 
-            # 多物体标准场景
+            # ---------- Mode 2: Standard multi-object scene ----------
+            # Randomize number and types of objects (ensure at least one occlusion scenario)
             num_objects = np.random.randint(5, self.MAX_OBJECTS + 1)
             types_to_spawn = ["cube", "sphere"]
             for _ in range(num_objects - 2):
                 types_to_spawn.append(np.random.choice(["cube", "sphere"]))
             random.shuffle(types_to_spawn)
 
+            # Create a deliberately occluded target: first place target, then its occluder along goal direction
             occluded_type = types_to_spawn.pop(0)
             occluded_name = f"object_{len(self.objects)}"
             pos_occluded = get_safe_spawn_position(
@@ -769,6 +881,7 @@ class StrategicPushAndGraspEnv(gym.Env):
             pos_occluder = np.array([pos_occluder_xy[0], pos_occluder_xy[1], pos_occluded[2]])
             self._spawn_object(occluder_name, occluder_type, pos_occluder)
 
+            # Spawn the remaining objects at safe, non-overlapping positions
             for object_type in types_to_spawn:
                 body_name = f"object_{len(self.objects)}"
                 spawn_pos = get_safe_spawn_position(
@@ -777,16 +890,22 @@ class StrategicPushAndGraspEnv(gym.Env):
                 )
                 self._spawn_object(body_name, object_type, spawn_pos)
 
+            # Add to fix
+            # Record start count for consistent completion metrics
+            self.total_objects_at_start = len(self.objects)
+
+            # Run occlusion analysis and recolor after all objects are placed
             analyze_scene_occlusions(self.sim, self.objects, self.OCCLUSION_THRESHOLD)
             for name in self.objects:
                 self.previous_occlusion_states[name] = self.objects[name]["is_occluded"]
             update_object_colors(self.sim, self.objects, self.COLOR_GREEN, self.COLOR_YELLOW, self.COLOR_RED)
 
+            # Choose an initial target
             self.current_target = select_target_heuristic(self.sim, self.objects, self.goal_pos, self.collected_objects)
 
+        # Initialize episode-level trackers (outside no_rendering() for symmetry with single-object branch)
         self.previous_joint_positions = self.robot.get_obs()[:7]
         self.episode_step = 0
+
+        # Return initial observation and empty info dict (Gymnasium API)
         return self._get_obs(), {}
-
-
-

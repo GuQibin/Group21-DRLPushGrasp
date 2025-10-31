@@ -100,6 +100,7 @@ def squash_action_and_log_prob(mu, std, raw_action=None, eps=1e-4):  # FIXED: in
     log_prob -= torch.log(1 - action.pow(2) + eps).sum(-1, keepdim=True)
     return action, log_prob, raw_action
 
+
 # ===================== ACTOR-CRITIC NETWORK ========================
 # Matches your proposal:
 # - Object encoder → 64D per object
@@ -168,6 +169,7 @@ class ActorCritic(nn.Module):
         entropy = dist.entropy().sum(-1, keepdim=True)
         return logp, entropy, v
 
+
 # ====================== ROLLOUT BUFFER =============================
 # On-policy buffer storing transitions for PPO update
 class RolloutBuffer:
@@ -234,6 +236,7 @@ class RolloutBuffer:
                 self.adv[mb],
                 self.ret[mb],
             )
+
 
 # ========================= CONFIGURATION ===========================
 @dataclass

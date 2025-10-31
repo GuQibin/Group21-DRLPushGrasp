@@ -66,9 +66,9 @@ print("Part 1: Running ONE full episode in a SIMPLE scene...")
 print("-" * 70)
 
 # Storage for all data collected during the episode
-episode_rewards: List[float] = []
-episode_log_probs: List[torch.Tensor] = []
-episode_action_vectors: List[np.ndarray] = [] # <-- [新增] 存储具体的动作向量
+episode_rewards: List[float] = []           # store scalar rewards from each step
+episode_log_probs: List[torch.Tensor] = []  # store log-probabilities of actions
+episode_action_vectors: List[np.ndarray] = []  # store the actual action vectors taken (added)
 
 # Use 'options' to reset to a simple, single-object scene
 print("Resetting to a simple, single-object demo scene for clarity...")
@@ -94,9 +94,9 @@ while not (terminated or truncated):
     next_obs, reward, terminated, truncated, info = env.step(action_np)
 
     # [Store Data]
-    episode_rewards.append(reward)
-    episode_log_probs.append(log_prob)
-    episode_action_vectors.append(action_np) # <-- [新增] 存储这个动作
+    episode_rewards.append(reward)          # store the reward received at this step
+    episode_log_probs.append(log_prob)      # store the log-probability of the chosen action
+    episode_action_vectors.append(action_np)  # store the actual action vector taken (added)
 
     obs = next_obs
     episode_length += 1
@@ -105,7 +105,7 @@ print(f"\n✓ Episode finished after {episode_length} steps.")
 print(f"  Total Reward collected: {sum(episode_rewards):.2f}\n")
 env.close() # Close the GUI window
 
-# --- 5. [新增] 汇总 (Episode Summary) ---
+# --- 5. (Episode Summary) ---
 print("-" * 70)
 print("Part 1.5: Episode Summary (What the Network Saw & Did)")
 print("-" * 70)
@@ -128,8 +128,9 @@ for i, action_vec in enumerate(episode_action_vectors):
         grasp_count += 1
     else:
         push_count += 1
-    # 打印每一步的动作和解释
-    print(f"    Step {i+1:2d}: Type={action_type:<5} | Raw Vector = [SKILL:{a_skill:6.2f}, X:{action_vec[1]:6.2f}, Y:{action_vec[2]:6.2f}, THETA:{action_vec[3]:6.2f}]")
+
+    # Print each step's action and a brief explanation
+    print(f"  Step {i+1:2d}: Type={action_type:<5} | Raw Vector = [SKILL:{a_skill:6.2f}, X:{action_vec[1]:6.2f}, Y:{action_vec[2]:6.2f}, THETA:{action_vec[3]:6.2f}]")
 
 print("    --------------------------------------------------")
 print(f"    Total Grasp decisions: {grasp_count}")
@@ -137,7 +138,7 @@ print(f"    Total Push decisions:  {push_count}")
 print("\n  This data will now be used to perform the backward pass...")
 
 
-# --- 6. 执行一次完整的训练更新 (Backward Pass) ---
+# --- 6. Perform a single training update (Backward Pass) ---
 print("-" * 70)
 print("Part 2: Performing ONE training update (Backward Pass)...")
 print("-" * 70)

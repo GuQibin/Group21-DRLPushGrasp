@@ -97,29 +97,6 @@ can focus on **when** to push vs. grasp—not *how* to drive every joint.
 
 ---
 
-## Sample output (yet to be trained)
-https://github.com/user-attachments/assets/814c61c7-fae9-4b54-856e-484662029390
-
-a series of tests were conducted using a random sampling policy. This approach involves repeatedly calling env.action_space.sample() to generate arbitrary actions, serving as a robust "smoke test" to uncover potential bugs, verify the API, and observe the system's baseline physical behavior without any learned intelligence. 
-the reset logic successfully populates the tabletop with a random number of objects (5-10) of varying types.
-Key features validated during this phase include:
-
-- **Guaranteed Strategic Complexity:** The reset function deterministically creates an occluded object pair (the two red cubes in this example), ensuring every episode requires strategic reasoning.
-
-- **State-Based Visualization:**  Objects are automatically colored based on their state, providing immediate visual feedback. In the scene above, Green cubes are non-occluded and graspable, while Red cubes are occluded and require a push action first. Yellow spheres are designated as push-preferred targets. The green square area represents the destination reward target.
-
-- **Safe Spawning:**  The get_safe_spawn_position utility ensures that no objects are spawned inside the goal or overlapping with one another.
-
-A Random Grasp Attempt. The robot moves to execute a grasp on a green cube based on a randomly sampled action vector [α_skill, α_x, α_y, α_θ].
-
-Observations from this phase confirmed that:
-
-- The hybrid action space correctly translates a positive α_skill into a call to the execute_pick_and_place primitive.
-
-- The local coordinate system for α_x and α_y works as intended, with the robot targeting points relative to the object's center, not the world frame.
-
-- The motion primitives are robust enough to handle even nonsensical random commands (e.g., attempting to grasp the very edge of an object) without crashing the simulation.
-
 ## Citation
 ````
 @article{gallouedec2021pandagym,

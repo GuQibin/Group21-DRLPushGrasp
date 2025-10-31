@@ -6,6 +6,17 @@ import pybullet as p
 SLOW = 0
 
 def get_ee_position_safe(robot) -> np.ndarray:
+    """
+    Safely retrieves the end-effector (EE) position of the robot.
+
+    Priority:
+      1. Use the robot's built-in API `get_ee_position()` if available.
+      2. Fallback to querying PyBullet link state directly (link index = 11 for Panda).
+      3. Return [0, 0, 0] if all methods fail.
+
+    Returns:
+        np.ndarray: 3D world position of the robot's end-effector (x, y, z).
+    """
     try:
         # ====================================================================
         # METHOD 1: Robot's built-in API (preferred)
@@ -44,6 +55,17 @@ def get_ee_position_safe(robot) -> np.ndarray:
 
 
 def get_ee_orientation_safe(robot) -> np.ndarray:
+    """
+    Safely retrieves the robot's end-effector orientation (quaternion).
+
+    Tries the following in order:
+      1. Use robot's built-in `get_ee_orientation()` API.
+      2. Query PyBullet link state directly.
+      3. Return identity quaternion [0, 0, 0, 1] if all fail.
+
+    Returns:
+        np.ndarray: Quaternion [x, y, z, w] representing EE orientation.
+    """
     try:
         # ====================================================================
         # METHOD 1: Robot's built-in API
@@ -75,6 +97,7 @@ def get_ee_orientation_safe(robot) -> np.ndarray:
         print(f"Warning: Could not get EE orientation: {e}")
         return np.array([0, 0, 0, 1], dtype=np.float32)
 
+
 def get_current_joint_positions(robot) -> Optional[np.ndarray]:
     """
     Safely retrieves the current joint positions of the robot's arm.
@@ -101,7 +124,23 @@ def get_current_joint_positions(robot) -> Optional[np.ndarray]:
         print(f"  ⚠ Error getting current joint positions: {e}")
         return None
 
+
 def get_gripper_state(robot) -> dict:
+    """
+    Safely retrieves the gripper state (width and open/closed status).
+
+    Supports multiple observation formats:
+      - Standard panda-gym: indices [14:16]
+      - Older/minimal format: indices [7:9]
+      - Fallback: default to closed if unavailable
+
+    Returns:
+        dict: {
+            'width': float,        # total finger opening width (m)
+            'is_closed': bool,     # True if width < 0.01
+            'is_open': bool        # True if width > 0.07
+        }
+    """
     try:
         # ====================================================================
         # STEP 1: Get robot observation vector
@@ -156,12 +195,35 @@ def get_gripper_state(robot) -> dict:
             'is_open': False     # Don't assume open
         }
 
+
 def execute_pick_and_place(sim, robot, target_object: str,
                            alpha_x: float, alpha_y: float,
                            goal_pos: np.ndarray,
-                           workspace_bounds: Tuple[float, float, float, float], # <-- 1. 新增参数
+                           workspace_bounds: Tuple[float, float, float, float], 
                            approach_height: float = 0.15,
                            grasp_height: float = 0.03) -> bool:
+    """
+    Executes a complete pick-and-place routine for the specified object.
+
+    The routine consists of:
+      1. Approach from above
+      2. Descend and grasp
+      3. Lift, transport, and place at the goal
+      4. Retract to safe height
+
+    Args:
+        sim: Simulation instance (PyBullet wrapper)
+        robot: Robot instance (e.g., Panda)
+        target_object: Name of the object to pick up
+        alpha_x, alpha_y: Normalized offsets controlling grasp position
+        goal_pos: Target (x, y, z) position for placing the object
+        workspace_bounds: (x_min, x_max, y_min, y_max) safety limits
+        approach_height: Height for approaching above the object
+        grasp_height: Z height for grasping
+
+    Returns:
+        bool: True if pick-and-place succeeded, False otherwise.
+    """
     # ========================================================================
     # PHASE 0: SETUP - Query object state
     # ========================================================================
@@ -291,15 +353,12 @@ def execute_pick_and_place(sim, robot, target_object: str,
 
 def execute_push(sim, robot, target_object: str,
                  alpha_x: float, alpha_y: float, alpha_theta: float,
-                 workspace_bounds: Tuple[float, float, float, float],  # <-- 1. 新增参数
+                 workspace_bounds: Tuple[float, float, float, float], 
                  push_distance: float = 0.05,
                  push_height: float = 0.03,
                  use_object_frame: bool = True) -> bool:
     """
     Execute push primitive on target object.
-
-    (函数顶部的详细注释保持不变)
-    ...
     """
     # ========================================================================
     # PHASE 0: SETUP - Query object state
@@ -341,10 +400,12 @@ def execute_push(sim, robot, target_object: str,
 
     post_push_pos[0] = np.clip(post_push_pos[0], workspace_bounds[0], workspace_bounds[1])
     post_push_pos[1] = np.clip(post_push_pos[1], workspace_bounds[2], workspace_bounds[3])
+
     # ========================================================================
     if compute_inverse_kinematics(sim, robot, pre_push_pos) is None:
         print(f"  ❌ Pre-push position is unreachable. Aborting push.")
         return False
+    
     # ========================================================================
     # PHASE 1: MOVE TO PRE-PUSH POSITION
     # ========================================================================
@@ -373,11 +434,28 @@ def execute_push(sim, robot, target_object: str,
     print(f"  ✓ Push complete!")
     return True
 
+
 def move_to_position(sim, robot, target_pos: np.ndarray,
                     gripper_open: bool = True,
                     steps: int = 50,
                     sleep_sec: float = 0.0) -> bool:
+    """
+    Moves the robot's end-effector smoothly toward a target 3D position.
 
+    The motion is executed in small incremental steps using simple 
+    proportional control, while optionally opening or closing the gripper.
+
+    Args:
+        sim: Simulation instance (PyBullet wrapper)
+        robot: Robot instance (e.g., Panda)
+        target_pos: Target (x, y, z) position in world coordinates
+        gripper_open: Whether the gripper stays open during motion
+        steps: Maximum number of simulation steps for the movement
+        sleep_sec: Optional delay per step for slow motion visualization
+
+    Returns:
+        bool: True if the end-effector reached the target, False otherwise.
+    """
 
     initial_pos = get_ee_position_safe(robot)
     initial_distance = np.linalg.norm(target_pos - initial_pos)
@@ -421,7 +499,6 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
     return success
 
 
-
 def open_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
     """Open the gripper to 7 cm, then step the simulator for a few iterations to let physics settle."""
     import time
@@ -432,6 +509,7 @@ def open_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
         if sleep_sec: time.sleep(sleep_sec)
     w = get_gripper_width(sim)
 
+
 def close_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
     """Close the gripper to 0 cm (hold by friction), then step for a few iterations to settle."""
     import time
@@ -440,6 +518,7 @@ def close_gripper(sim, robot, steps: int = 30, sleep_sec: float = 0.0):
         sim.step()
         if sleep_sec: time.sleep(sleep_sec)
     w = get_gripper_width(sim)
+
 
 def get_gripper_state(robot) -> dict:
     """
@@ -457,9 +536,26 @@ def get_gripper_state(robot) -> dict:
         "is_open":   w > 0.07
     }
 
+
 def check_grasp_success(sim, robot, object_name: str,
                        initial_z: Optional[float] = None,
                        min_lift: float = 0.01) -> bool:
+    """
+    Checks whether a grasped object has been successfully lifted.
+
+    The function compares the object's current height to its initial height
+    and verifies that it is not falling after the lift.
+
+    Args:
+        sim: Simulation instance (PyBullet wrapper)
+        robot: Robot instance
+        object_name: Name of the object to check
+        initial_z: Optional initial Z height before grasp (auto-detected if None)
+        min_lift: Minimum required lift distance (in meters) to consider success
+
+    Returns:
+        bool: True if the object is lifted and stable, False otherwise.
+    """
     try:
         if initial_z is None:
             initial_z = sim.get_base_position(object_name)[2]
@@ -485,6 +581,23 @@ def check_grasp_success(sim, robot, object_name: str,
 
 def compute_inverse_kinematics(sim, robot, target_pos: np.ndarray,
                                target_ori: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+    """
+    Computes the inverse kinematics (IK) solution for the robot's end-effector.
+
+    Uses PyBullet's built-in IK solver to find joint angles that achieve
+    the desired end-effector position and orientation.
+
+    Args:
+        sim: Simulation instance (PyBullet wrapper)
+        robot: Robot instance (e.g., Panda)
+        target_pos: Target end-effector position [x, y, z]
+        target_ori: Optional target orientation as quaternion [x, y, z, w]
+                    (defaults to pointing straight down if None)
+
+    Returns:
+        Optional[np.ndarray]: 7D array of joint angles if successful,
+                              None if IK computation fails.
+    """
     try:
         if target_ori is None:
             # Default: Gripper pointing straight down
@@ -506,8 +619,21 @@ def compute_inverse_kinematics(sim, robot, target_pos: np.ndarray,
         print(f"  ⚠ Error computing IK: {e}")
         return None
 
+
 def plan_trajectory(start_joints: np.ndarray, goal_joints: np.ndarray,
                     num_waypoints: int = 10) -> np.ndarray:
+    """
+    Generates a smooth linear joint-space trajectory between two configurations.
+
+    Args:
+        start_joints: Starting joint angles (7D array).
+        goal_joints: Target joint angles (7D array).
+        num_waypoints: Number of intermediate points along the trajectory.
+
+    Returns:
+        np.ndarray: Interpolated joint trajectory (num_waypoints × DOF).
+    """
+
     if start_joints is None or goal_joints is None:
         print(f"  ⚠ Error: Cannot plan trajectory with None as start or goal joints.")
         return np.array([])
@@ -522,6 +648,17 @@ def plan_trajectory(start_joints: np.ndarray, goal_joints: np.ndarray,
 
 
 def check_collision_between_bodies(sim, body1_name: str, body2_name: str) -> bool:
+    """
+    Checks whether two bodies are in contact in the PyBullet simulation.
+
+    Args:
+        sim: Simulation instance (PyBullet wrapper).
+        body1_name: Name of the first body.
+        body2_name: Name of the second body.
+
+    Returns:
+        bool: True if a collision/contact is detected, False otherwise.
+    """
     try:
         body1_id = sim._bodies_idx.get(body1_name)
         body2_id = sim._bodies_idx.get(body2_name)
@@ -538,6 +675,16 @@ def check_collision_between_bodies(sim, body1_name: str, body2_name: str) -> boo
 
 
 def quaternion_to_rotation_matrix(quaternion: np.ndarray) -> np.ndarray:
+    """
+    Converts a quaternion [x, y, z, w] into a 3×3 rotation matrix.
+
+    Args:
+        quaternion: Quaternion representing orientation.
+
+    Returns:
+        np.ndarray: Corresponding 3×3 rotation matrix.
+                    Returns identity matrix if conversion fails.
+    """
     try:
         # PyBullet's getMatrixFromQuaternion returns a 9-element list in row-major order.
         rot_matrix = np.array(p.getMatrixFromQuaternion(quaternion)).reshape(3, 3)
@@ -551,7 +698,22 @@ def quaternion_to_rotation_matrix(quaternion: np.ndarray) -> np.ndarray:
 
 def wait_for_stability(sim, object_name: str, max_steps: int = 50,
                       velocity_threshold: float = 0.01) -> bool:
+    """
+    Waits until a simulated object becomes stable (i.e., stops moving).
 
+    The function steps the physics simulation repeatedly and checks the
+    object's linear velocity. Returns True once the speed falls below
+    the given threshold, or False if it never stabilizes.
+
+    Args:
+        sim: Simulation instance (PyBullet wrapper).
+        object_name: Name of the object to monitor.
+        max_steps: Maximum simulation steps to wait for stability.
+        velocity_threshold: Speed threshold below which the object is considered stable.
+
+    Returns:
+        bool: True if the object stabilizes within max_steps, False otherwise.
+    """
     for _ in range(max_steps):
         sim.step()
         try:
@@ -565,11 +727,24 @@ def wait_for_stability(sim, object_name: str, max_steps: int = 50,
 
 
 def diagnose_robot_control(robot, sim, steps: int = 10):
+    """
+    Performs a basic diagnostic test on robot control functionality.
 
+    This routine verifies:
+      1. Zero-action stability (no motion when action = 0)
+      2. Position control response to small deltas
+      3. Gripper open/close commands
 
+    Args:
+        robot: Robot instance (e.g., Panda).
+        sim: Simulation instance (PyBullet wrapper).
+        steps: Number of steps for each motion test.
+
+    Prints:
+        Diagnostic results for motion control and gripper functionality.
+    """
     initial_pos = get_ee_position_safe(robot)
     initial_obs = robot.get_obs()
-
 
     for _ in range(10):
         robot.set_action(np.array([0.0, 0.0, 0.0, 0.0]))
@@ -586,7 +761,6 @@ def diagnose_robot_control(robot, sim, steps: int = 10):
     delta_x = pos_after_x - pos_after_zero
 
     gripper_state_initial = get_gripper_state(robot)
-
 
     open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
     gripper_state_open = get_gripper_state(robot)
@@ -635,7 +809,7 @@ def _find_finger_joint_ids(sim):
 def set_gripper_width(sim, width_m: float, force: float = 80.0):
     """
     Set the gripper based on the "actual opening width (two-finger spacing)". Panda limit ~0.08m.
-We set the target displacement of each fingertip as width/2.
+    We set the target displacement of each fingertip as width/2.
     """
     uid = _get_panda_uid(sim)
     if uid is None:
