@@ -84,7 +84,7 @@ python -m scripts.test_custom_env
 
 
 
-# Appendix: Core Utilities & Action Primitives
+# 🚀 Appendix: Core Utilities & Action Primitives
 
 ## Object Utilities (`utils/object_util.py`)
 - **`
@@ -106,7 +106,7 @@ can focus on **when** to push vs. grasp—not *how* to drive every joint.
 
 ---
 
-## Core Action Primitives
+## 🚀 Core Action Primitives
 
 - **`execute_pick_and_place(sim, robot, target_object, alpha_x, alpha_y, goal_pos, workspace_bounds, approach_height=0.15, grasp_height=0.03) -> bool`**  
   Eight-phase grasp pipeline (approach → descend → close → verify → lift → transport → place → retract).  
