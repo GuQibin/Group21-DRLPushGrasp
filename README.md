@@ -1,41 +1,33 @@
-# Group21-DRLPushGrasp  
-**Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation**  
-*Joint-Space Control of Push-Grasp Strategies in Constrained Environments*  
+# Group21-DRLPushGrasp
+**Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation**
+*ME5418 Project Milestone 2: Neural Network Implementation*
 
 ---
 
-## Project Overview  
-This project implements a **hierarchical reinforcement learning (HRL)** framework that enables a robotic manipulator to **jointly plan and execute push-and-grasp strategies** in cluttered or constrained environments.  
+## Project Overview (Milestone 2)
 
-It builds upon a custom PyBullet simulation environment with high-level task abstractions (push vs. grasp) and low-level joint-space control, allowing the agent to learn effective manipulation behaviors.  
-
----
-
-## Test Scenario & Random Baseline
-Each episode samples a diverse set of objects (shape/size/pose/placement randomized), always including red/yellow/green targets. The robot executes a random policy over push/grasp primitives to provide a sanity‐check baseline. We report grasp success, push displacement/goal rate, scene clearance, safety violations, and episodic return.
+This project aims to implement a reinforcement learning (RL) framework, enabling a robotic manipulator to learn to co-plan "push" and "grasp" strategies in cluttered environments.
 
 ---
 
-## Directory Structure  
+## Directory Structure
+
 ```text
 Group21-DRLPushGrasp/
 ├── environment.yaml                # Conda env spec (Python 3.8 + pip pkgs)
-├── LICENSE
 ├── README.md                       # This file
-├── requirements.txt                # (Optional) pip-style dependency list
 ├── envs/
-│   ├── init.py                     # Registers the custom env(s)
-│   └── strategic_env.py            # Core environment implementation
+│   ├── __init__.py                 # Registers the custom Gym env
+│   └── strategic_env.py            # Core environment (StrategicPushAndGraspEnv)
 ├── scripts/
-│   └──  test_custom_env.py          # Simple loop to test the env end-to-end
-│ 
-├── utils/
-│   ├── object_util.py              # Object spawning / utilities
-│   ├── physics_util.py             # Physics helpers (e.g., step/settle)
-│   └── robot_util.py               # Robot (gripper/arm) helper functions
-└── video/
-    └── demo_presentation.mp4       # Demo sample video for presentation
-```
+│   ├── __init__.py                 # [CRITICAL] Makes 'scripts' a Python package
+│   ├── ppo_scratch.py              # [CORE] Full implementation of PPO and ActorCritic NN
+│   ├── demo_nn.py                  # [DEMO] Milestone 2 demo script (fwd/bwd pass)
+│   └── test_custom_env.py          # [OPTIONAL] M1 environment smoke test script for gym
+└── utils/
+    ├── object_util.py              # Object-related utilities
+    ├── physics_util.py             # Physics/collision-related utilities
+    └── robot_util.py               # Robot action primitives
 
 
 ## ⚙️ Environment Setup
@@ -51,16 +43,48 @@ conda env create -f environment.yaml
 conda activate me5418-demo
 ```
 
----
 
-### Run Demo
+
+## Milestone 2: Neural Network Demo 
+
+
+
+The core deliverable for this milestone is a demo script to **isolate and validate the neural network**. It loads our real environment, sets up a simple single-object scene, and demonstrates a complete **forward pass**, **backward pass**, and **parameter update** in an end-to-end training micro-loop.
+
+ please run the following from the project root directory:
 
 ```Bash
-# Run the full environment loop to verify environment registration & stepping
+python -m scripts.demo_nn
+```
+
+### Expected Output
+
+You will see:
+
+1. A PyBullet window pop up, showing a simple single-object scene (the robot will execute a few steps).
+2. The window will close, and the terminal will print **"Part 1.5: Episode Summary"**, showing the exact action vectors the network **outputted** during the episode.
+3. Next, **"Part 2: Backward Pass"** will execute. It will:
+   - Calculate a real REINFORCE loss based on the collected rewards.
+   - Print a sample network weight **before** the update.
+   - Execute `loss.backward()` and `optimizer.step()`.
+   - Print the same network weight **after** the update.
+4. Finally, you will see a `✓ SUCCESS: Parameter value changed!` message, **proving our network architecture is correct and trainable.**
+
+
+
+### (Optional) Run Environment Smoke Test (Milestone 1)
+
+
+
+If you wish to test the environment's stability with purely random actions (produces a lot of log spam), you can run:
+
+```Bash
 python -m scripts.test_custom_env
 ```
 
----
+
+
+# Appendix: Core Utilities & Action Primitives
 
 ## Object Utilities (`utils/object_util.py`)
 - **`
