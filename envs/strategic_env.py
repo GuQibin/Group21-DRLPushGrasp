@@ -734,8 +734,14 @@ class StrategicPushAndGraspEnv(gym.Env):
         # Set physics properties (friction, restitution, etc.)
         body_id = self.sim._bodies_idx.get(body_name)
         if body_id is not None:
-            p.changeDynamics(bodyUniqueId=body_id, linkIndex=-1,
-                             lateralFriction=0.8, spinningFriction=0.01, restitution=0.05)
+            # Increase sliding friction on dynamic objects to reduce sliding
+            p.changeDynamics(
+                bodyUniqueId=body_id,
+                linkIndex=-1,
+                lateralFriction=1.2,  # higher sliding friction
+                spinningFriction=0.01,
+                restitution=0.05
+            )
 
         self.objects[body_name] = {"type": object_type, "is_occluded": False, "shape_descriptor": shape_desc}
        
@@ -785,6 +791,11 @@ class StrategicPushAndGraspEnv(gym.Env):
                     rgba_color=np.array([0.8, 0.8, 0.8, 1])
                 )
                 self.scene_setup = True
+
+            # Ensure the table has higher sliding friction each reset
+            table_id = self.sim._bodies_idx.get("table")
+            if table_id is not None:
+                p.changeDynamics(table_id, -1, lateralFriction=1.2)
 
             # Remove all existing dynamic objects
             for body_name in list(self.objects.keys()):

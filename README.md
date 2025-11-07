@@ -1,12 +1,13 @@
 # Group21-DRLPushGrasp
 **Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation**
-*ME5418 Project Milestone 2: Neural Network Implementation*
+*ME5418 Project Milestone 3: Full PPO2 Training with Learning Rate Decay*
 
 ---
 
-## Project Overview (Milestone 2)
+## Project Overview (Milestone 3)
 
-This project aims to implement a reinforcement learning (RL) framework, enabling a robotic manipulator to learn to co-plan "push" and "grasp" strategies in cluttered environments.
+This milestone implements the complete PPO2 algorithm within our hierarchical reinforcement-learning framework.
+The goal is to enable a robotic manipulator to learn and optimize both push and grasp strategies in cluttered scenes through stable on-policy updates, while integrating a learning-rate decay scheduler to improve training convergence and performance stability.
 
 ---
 
@@ -45,7 +46,35 @@ conda activate me5418-demo
 
 
 
-## Milestone 2: Neural Network Demo 
+## Milestone 3: PPO2 Training Demo
+
+
+To launch the full PPO2 training loop with learning-rate decay and observe the policy improvement process, run:
+
+ please run the following from the project root directory:
+
+```Bash
+python -m scripts.ppo_scratch
+```
+
+### Expected Output
+
+You will see:
+
+1. A PyBullet window will open and the robot will start training on push-and-grasp tasks with randomly sampled objects.
+
+2. The terminal will display live training logs, including:
+
+  - Current episode reward and average return.
+
+  - PPO2 loss components (Actor loss / Critic loss / Entropy).
+
+  - Learning rate updates from the lr decay scheduler (gradually reducing as training progresses).
+
+3. After each training epoch, key metrics (e.g., success rate and mean reward) are printed to indicate policy stabilization.
+
+
+## (Optional) Milestone 2: Neural Network Demo 
 
 
 

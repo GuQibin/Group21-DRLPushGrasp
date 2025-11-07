@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 from typing import Tuple, Optional
 import pybullet as p
 
@@ -354,7 +354,7 @@ def execute_pick_and_place(sim, robot, target_object: str,
 def execute_push(sim, robot, target_object: str,
                  alpha_x: float, alpha_y: float, alpha_theta: float,
                  workspace_bounds: Tuple[float, float, float, float], 
-                 push_distance: float = 0.05,
+                 push_distance: float = 0.01,
                  push_height: float = 0.03,
                  use_object_frame: bool = True) -> bool:
     """
