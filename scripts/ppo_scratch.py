@@ -265,6 +265,10 @@ class PPOConfig:
     num_layers: int = 2
     activation: str = "tanh"
 
+    # Checkpoint settings
+    save_dir: str = "checkpoints"
+    checkpoint_interval: int = 5_000   # how many env steps between checkpoints
+
 
 # ====== FUNCTION 1: get_entropy_coef ======
 def get_entropy_coef(current_step, total_steps, start_coef, end_coef):
@@ -357,6 +361,7 @@ def ppo_train(cfg: PPOConfig):
     # Reset environment
     obs, _ = env.reset(seed=cfg.seed)
     start_time = time.time()
+    last_ckpt_step = 0
 
     print("Starting training...\n")
 
@@ -510,6 +515,27 @@ def ppo_train(cfg: PPOConfig):
               f"PolicyLoss={avg_policy_loss:.4f} | ValueLoss={avg_value_loss:.4f} | "
               f"Entropy={avg_entropy:.4f} | KL={avg_kl:.4f} | "
               f"EntCoef={current_ent_coef:.4f} | LR={current_lr:.2e}")
+        
+        # ====== Save checkpoints periodically ======
+        if cfg.save_dir and (global_steps - last_ckpt_step) >= cfg.checkpoint_interval:
+            os.makedirs(cfg.save_dir, exist_ok=True)
+            ckpt_path = os.path.join(cfg.save_dir, f"ppo_step_{global_steps}.pt")
+            torch.save(
+                {
+                    "model_state_dict": net.state_dict(),
+                    "optimizer_state_dict": opt.state_dict(),
+                    "global_steps": global_steps,
+                    "config": cfg.__dict__,
+                },
+                ckpt_path,
+            )
+            # Also save a "latest" weights-only file for方便加载
+            torch.save(
+                net.state_dict(),
+                os.path.join(cfg.save_dir, "ppo_latest_weights.pt"),
+            )
+            print(f"[Checkpoint] Saved to {ckpt_path}")
+            last_ckpt_step = global_steps
 
     env.close()
 
@@ -642,7 +668,9 @@ if __name__ == "__main__":
         seed=42,
         hidden_size=256,
         num_layers=4,
-        activation="tanh"   
+        activation="tanh",
+        save_dir="checkpoints_run1",
+        checkpoint_interval=1_000,
     )
     net = ppo_train(cfg)
 

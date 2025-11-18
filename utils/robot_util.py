@@ -2,8 +2,8 @@
 from typing import Tuple, Optional
 import pybullet as p
 
-# SLOW = 1/120
-SLOW = 0
+SLOW = 1/120
+# SLOW = 0
 
 def get_ee_position_safe(robot) -> np.ndarray:
     """
@@ -354,8 +354,9 @@ def execute_pick_and_place(sim, robot, target_object: str,
 def execute_push(sim, robot, target_object: str,
                  alpha_x: float, alpha_y: float, alpha_theta: float,
                  workspace_bounds: Tuple[float, float, float, float], 
-                 push_distance: float = 0.01,
-                 push_height: float = 0.03,
+
+                 push_distance: float = 0.035,
+                 push_height: float = 0.02,
                  use_object_frame: bool = True) -> bool:
     """
     Execute push primitive on target object.
@@ -388,19 +389,38 @@ def execute_push(sim, robot, target_object: str,
     # ========================================================================
     # CALCULATE PUSH TRAJECTORY POINTS
     # ========================================================================
+     # Default offset if shape query fails
     pre_push_offset = 0.03
+
+    try:
+        body_id = sim._bodies_idx.get(target_object)
+        if body_id is not None:
+            shape_data = sim.physics_client.getCollisionShapeData(body_id, -1)
+            if shape_data:
+                geom_type = shape_data[0][2]
+                dims = shape_data[0][3]
+
+                if geom_type == p.GEOM_SPHERE:
+                    # sphere: dims[0] = radius
+                    radius = float(dims[0])
+                    pre_push_offset = radius + 0.01
+
+                elif geom_type == p.GEOM_BOX:
+                    # box: dims = [half_x, half_y, half_z]
+                    half_x, half_y, _ = dims
+                    dir_x, dir_y = push_direction[0], push_direction[1]
+                    # projection of half-extents along push direction
+                    proj_radius = abs(dir_x) * half_x + abs(dir_y) * half_y
+                    pre_push_offset = proj_radius + 0.01
+
+    except Exception:
+        # on error, keep default pre_push_offset
+        pass
+
+    # pre-push position: from contact_point (此时等价于物体中心 xy) 
+    # along opposite push direction by pre_push_offset
     pre_push_pos = contact_point - push_direction * pre_push_offset
     post_push_pos = contact_point + push_direction * push_distance
-
-    # ========================================================================
-    # Clip the trajectory points to stay within workspace bounds
-    # ========================================================================
-    pre_push_pos[0] = np.clip(pre_push_pos[0], workspace_bounds[0], workspace_bounds[1])
-    pre_push_pos[1] = np.clip(pre_push_pos[1], workspace_bounds[2], workspace_bounds[3])
-
-    post_push_pos[0] = np.clip(post_push_pos[0], workspace_bounds[0], workspace_bounds[1])
-    post_push_pos[1] = np.clip(post_push_pos[1], workspace_bounds[2], workspace_bounds[3])
-
     # ========================================================================
     if compute_inverse_kinematics(sim, robot, pre_push_pos) is None:
         print(f"  ❌ Pre-push position is unreachable. Aborting push.")
@@ -429,8 +449,12 @@ def execute_push(sim, robot, target_object: str,
     print(f"  Phase 3: Retracting...")
     retract_pos = post_push_pos.copy()
     retract_pos[2] += 0.1
-    move_to_position(sim, robot, retract_pos, gripper_open=True, steps=150, sleep_sec=SLOW)
 
+    # 先抬起，保持闭爪
+    move_to_position(sim, robot, retract_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
+
+    # 抬到安全高度后再张爪子
+    open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
     print(f"  ✓ Push complete!")
     return True
 
@@ -466,7 +490,7 @@ def move_to_position(sim, robot, target_pos: np.ndarray,
         try:
             current_pos = get_ee_position_safe(robot)
             error = target_pos - current_pos
-            delta = np.clip(error * 10.0, -1.0, 1.0)
+            delta = np.clip(error * 5.0, -1.0, 1.0)
             action = np.concatenate([delta, [gripper_ctrl]])
 
             if step % 10 == 0:

@@ -270,8 +270,24 @@ class StrategicPushAndGraspEnv(gym.Env):
         4. Re-selects target after object collection/removal
         """
         # Parse action vector
-        a_skill, alpha_x, alpha_y, alpha_theta = action
+        # Parse action vector
+        a_skill, alpha_x, alpha_y, alpha_dir = action
         action_type = "grasp" if a_skill > 0 else "push"
+
+        # Map alpha_dir ∈ [-1, 1] to 4 discrete direction indices 0,1,2,3
+        bins = np.array([-1.0, -0.5, 0.0, 0.5, 1.0])
+        idx = np.digitize(alpha_dir, bins) - 1  # result in [0,3]
+        idx = int(np.clip(idx, 0, 3))
+
+        # Map the 4 indices to corresponding alpha_theta values
+        # 0: +x, 1: +y, 2: -x, 3: -y
+        dir_to_alpha_theta = {
+            0: 0.0,    # 0°  → +x
+            1: 0.5,    # 90° → +y
+            2: 1.0,    # 180° → -x
+            3: -0.5,   # -90° → -y
+        }
+        alpha_theta = dir_to_alpha_theta[idx]
 
         # ==================================================================
         # FIX 1: VALIDATE TARGET BEFORE ACTION EXECUTION
@@ -325,6 +341,10 @@ class StrategicPushAndGraspEnv(gym.Env):
                 workspace_bounds=self.WORKSPACE_BOUNDS
             )
         elif action_type == "push":
+            if action_type == "push":
+                alpha_x = 0.0
+                alpha_y = 0.0
+
             print(f"\n Executing PUSH on {self.current_target}")
             self.action_was_successful = execute_push(
                 self.sim,
@@ -733,15 +753,14 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         # Set physics properties (friction, restitution, etc.)
         body_id = self.sim._bodies_idx.get(body_name)
+
         if body_id is not None:
-            # Increase sliding friction on dynamic objects to reduce sliding
-            p.changeDynamics(
-                bodyUniqueId=body_id,
-                linkIndex=-1,
-                lateralFriction=1.2,  # higher sliding friction
-                spinningFriction=0.01,
-                restitution=0.05
-            )
+            p.changeDynamics(bodyUniqueId=body_id, 
+                             linkIndex=-1,
+                             lateralFriction=1.2, 
+                             spinningFriction=0.05, 
+                             rollingFriction=0.05,
+                             restitution=0.02)
 
         self.objects[body_name] = {"type": object_type, "is_occluded": False, "shape_descriptor": shape_desc}
        
