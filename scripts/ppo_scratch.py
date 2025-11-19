@@ -30,6 +30,44 @@ def _fmt_secs(s: float) -> str:
     return f"{h:02d}:{m:02d}:{int(s):02d}"
 
 
+def _print_training_progress(global_steps: int,
+                             total_steps: int,
+                             start_time: float,
+                             current_episode: int,
+                             episode_step: int,
+                             episode_max_steps: int):
+    """
+    Utility printer for training progress (steps, ETA, and episode progress).
+    """
+    total_steps = max(total_steps, 1)
+    progress = min(max(global_steps / total_steps, 0.0), 1.0)
+    bar_width = 30
+    filled = int(progress * bar_width)
+    bar = "=" * filled + "." * (bar_width - filled)
+
+    elapsed = max(time.time() - start_time, 1e-6)
+    if global_steps > 0:
+        steps_per_sec = global_steps / elapsed
+        remaining_steps = max(total_steps - global_steps, 0)
+        eta = remaining_steps / steps_per_sec if steps_per_sec > 0 else float("inf")
+    else:
+        eta = float("inf")
+
+    eta_text = "??:??:??" if not math.isfinite(eta) else _fmt_secs(eta)
+
+    if episode_max_steps and episode_max_steps > 0:
+        episode_progress = f"{episode_step}/{episode_max_steps}"
+    else:
+        episode_progress = f"{episode_step}"
+
+    print(
+        f"[Progress] [{bar}] {progress * 100:5.1f}% | "
+        f"Step {global_steps}/{total_steps} | ETA {eta_text} | "
+        f"Episode {current_episode} ({episode_progress})",
+        flush=True
+    )
+
+
 # ====== IMPORT YOUR CUSTOM ENVIRONMENT ==============================
 from envs.strategic_env import StrategicPushAndGraspEnv
 
@@ -287,7 +325,7 @@ def ppo_train(cfg: PPOConfig):
     random.seed(cfg.seed)
 
     # Create environment
-    env = make_env(render=True)
+    env = make_env(render=False)
     obs_dim = env.observation_space.shape[0]
     # MODIFIED: Action space is Discrete(8), so act_dim is 8 (for logits)
     act_dim = env.action_space.n
@@ -340,6 +378,8 @@ def ppo_train(cfg: PPOConfig):
     obs, _ = env.reset(seed=cfg.seed)
     start_time = time.time()
     last_ckpt_step = 0
+    progress_log_interval = max(100, cfg.rollout_steps // 4)
+    last_progress_print = 0
 
     print("Starting training...\n")
 
@@ -367,6 +407,18 @@ def ppo_train(cfg: PPOConfig):
                 global_steps += 1
 
                 done = terminated or truncated
+
+                if (global_steps - last_progress_print) >= progress_log_interval or global_steps >= cfg.total_steps:
+                    episode_max_steps = getattr(env, "max_episode_steps", 0)
+                    _print_training_progress(
+                        global_steps,
+                        cfg.total_steps,
+                        start_time,
+                        len(episode_returns) + 1,
+                        ep_len,
+                        episode_max_steps
+                    )
+                    last_progress_print = global_steps
 
                 # Store transition
                 # Note: For discrete PPO, we store the action index tensor (raw_a)
@@ -614,11 +666,11 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=True, record_dir=None,
 
 if __name__ == "__main__":
     cfg = PPOConfig(
-        # total_steps=200_000,
-        total_steps=200,
-        rollout_steps=8192,
-        update_epochs=4,
-        mini_batch=512,
+        total_steps=20_000,
+        rollout_steps=1024,
+        update_epochs=3,
+        mini_batch=256,
+        device="cuda",
         gamma=0.99,
         gae_lambda=0.95,
         clip_eps=0.2,
@@ -631,7 +683,7 @@ if __name__ == "__main__":
         lr_min=1e-5,
         target_kl=0.02,
         normalize_rewards=True,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        # device="cuda" if torch.cuda.is_available() else "cpu",
         seed=42,
         hidden_size=256,
         num_layers=4,
