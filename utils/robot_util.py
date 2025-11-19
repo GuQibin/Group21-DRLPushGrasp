@@ -3,10 +3,16 @@ from typing import Tuple, Optional
 import pybullet as p
 import time  # Added time import for sleep_sec
 
-SLOW = 1 / 120
+# SLOW = 1 / 120
 
 
-# SLOW = 0
+SLOW = 0
+
+
+def _scaled_steps(base_steps: int, motion_scale: float, min_steps: int = 15) -> int:
+    """Zip controller step counts down when motion_scale < 1."""
+    scale = max(0.1, float(motion_scale))
+    return max(min_steps, int(round(base_steps * scale)))
 
 # --- ADDED: Gripper control utilities (Required by open_gripper/close_gripper) ---
 def set_gripper_width(sim, width: float):
@@ -149,7 +155,8 @@ def execute_pick_and_place(sim, robot, target_object: str,
                            goal_pos: np.ndarray,
                            workspace_bounds: Tuple[float, float, float, float],
                            approach_height: float = 0.15,
-                           grasp_height: float = 0.03) -> bool:
+                           grasp_height: float = 0.03,
+                           motion_scale: float = 1.0) -> bool:
     """
     Executes a complete pick-and-place routine.
     (Assumes alpha_x, alpha_y are 0.0 for rule-based center grasp)
@@ -186,7 +193,9 @@ def execute_pick_and_place(sim, robot, target_object: str,
     if compute_inverse_kinematics(sim, robot, approach_pos) is None:
         print(f"  ❌ Approach position is unreachable. Aborting grasp.")
         return False
-    success = move_to_position(sim, robot, approach_pos, gripper_open=True, steps=150, sleep_sec=SLOW)
+    approach_steps = _scaled_steps(150, motion_scale, min_steps=45)
+    success = move_to_position(sim, robot, approach_pos, gripper_open=True,
+                               steps=approach_steps, sleep_sec=SLOW)
     if not success:
         # print(f"  ❌ Failed to approach {target_object}")
         return False
@@ -195,15 +204,20 @@ def execute_pick_and_place(sim, robot, target_object: str,
     # print(f"  Phase 2: Lowering to grasp height...")
     grasp_pos = grasp_point.copy()
     grasp_pos[2] = grasp_height
-    success = move_to_position(sim, robot, grasp_pos, gripper_open=True, steps=150, sleep_sec=SLOW)
+    descend_steps = _scaled_steps(150, motion_scale, min_steps=45)
+    success = move_to_position(sim, robot, grasp_pos, gripper_open=True,
+                               steps=descend_steps, sleep_sec=SLOW)
     if not success:
         # print(f"  ❌ Failed to lower to grasp height for {target_object}")
         return False
 
     # PHASE 3: CLOSE GRIPPER
     # print(f"  Phase 3: Closing gripper...")
-    close_gripper(sim, robot, steps=60, sleep_sec=SLOW)
-    for _ in range(30): sim.step()
+    grip_steps = _scaled_steps(60, motion_scale, min_steps=15)
+    close_gripper(sim, robot, steps=grip_steps, sleep_sec=SLOW)
+    settle_steps = max(5, int(round(20 * motion_scale)))
+    for _ in range(settle_steps):
+        sim.step()
 
     # PHASE 4: MICRO-LIFT to validate grasp
     # print(f"  Phase 4: Micro-lift to check grasp...")
@@ -213,34 +227,41 @@ def execute_pick_and_place(sim, robot, target_object: str,
         obj_z_before = initial_obj_z
     micro_lift = get_ee_position_safe(robot).copy()
     micro_lift[2] += 0.03
-    move_to_position(sim, robot, micro_lift, gripper_open=False, steps=60, sleep_sec=SLOW)
-    for _ in range(20): sim.step()
+    micro_lift_steps = _scaled_steps(60, motion_scale, min_steps=20)
+    move_to_position(sim, robot, micro_lift, gripper_open=False,
+                     steps=micro_lift_steps, sleep_sec=SLOW)
+    for _ in range(settle_steps):
+        sim.step()
     obj_z_after = sim.get_base_position(target_object)[2]
     lift_gain = obj_z_after - obj_z_before
     if lift_gain < 0.01:
         # print(f"  ❌ Grasp failed (lift gain={lift_gain:.3f}m)")
-        open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
+        open_gripper(sim, robot, steps=grip_steps, sleep_sec=SLOW)
         return False
     # print(f"  ✓ Successfully grasped {target_object} (lift gain={lift_gain:.3f}m)")
 
     # PHASE 5: LIFT OBJECT
     lift_pos = get_ee_position_safe(robot)
     lift_pos[2] = approach_height
-    move_to_position(sim, robot, lift_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
+    move_to_position(sim, robot, lift_pos, gripper_open=False,
+                     steps=approach_steps, sleep_sec=SLOW)
 
     # PHASE 6: TRANSPORT TO GOAL
     transport_pos = np.array([goal_pos[0], goal_pos[1], approach_height])
-    move_to_position(sim, robot, transport_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
+    move_to_position(sim, robot, transport_pos, gripper_open=False,
+                     steps=approach_steps, sleep_sec=SLOW)
 
     # PHASE 7: PLACE OBJECT
     place_pos = np.array([goal_pos[0], goal_pos[1], 0.05])
-    move_to_position(sim, robot, place_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
-    open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
+    move_to_position(sim, robot, place_pos, gripper_open=False,
+                     steps=approach_steps, sleep_sec=SLOW)
+    open_gripper(sim, robot, steps=grip_steps, sleep_sec=SLOW)
 
     # PHASE 8: RETRACT
     retract_pos = place_pos.copy()
     retract_pos[2] = approach_height
-    move_to_position(sim, robot, retract_pos, gripper_open=True, steps=150, sleep_sec=SLOW)
+    move_to_position(sim, robot, retract_pos, gripper_open=True,
+                     steps=approach_steps, sleep_sec=SLOW)
 
     # print(f"  ✓ Pick-and-place complete!")
     return True
@@ -252,7 +273,8 @@ def execute_push(sim, robot, target_object: str,
 
                  push_distance: float = 0.035,
                  push_height: float = 0.02,
-                 use_object_frame: bool = True) -> bool:
+                 use_object_frame: bool = True,
+                 motion_scale: float = 1.0) -> bool:
     """
     MODIFIED: Execute push primitive with FIXED ORTHOGONAL OFFSET (to ensure torque).
     (Ignores alpha_x, alpha_y input)
@@ -316,14 +338,18 @@ def execute_push(sim, robot, target_object: str,
 
     # PHASE 1: MOVE TO PRE-PUSH POSITION
     # print(f"  Phase 1: Moving to pre-push position...")
-    success = move_to_position(sim, robot, pre_push_pos, gripper_open=False, steps=300, sleep_sec=SLOW)
+    pre_push_steps = _scaled_steps(300, motion_scale, min_steps=60)
+    success = move_to_position(sim, robot, pre_push_pos, gripper_open=False,
+                               steps=pre_push_steps, sleep_sec=SLOW)
     if not success:
         # print(f"  ❌ Failed to reach pre-push position for {target_object}")
         return False
 
     # PHASE 2: EXECUTE PUSH
     # print(f"  Phase 2: Executing push...")
-    success = move_to_position(sim, robot, post_push_pos, gripper_open=False, steps=300, sleep_sec=SLOW)
+    push_steps = _scaled_steps(300, motion_scale, min_steps=60)
+    success = move_to_position(sim, robot, post_push_pos, gripper_open=False,
+                               steps=push_steps, sleep_sec=SLOW)
     if not success:
         # print(f"  ⚠ Push may have been incomplete")
         pass
@@ -333,9 +359,12 @@ def execute_push(sim, robot, target_object: str,
     retract_pos = post_push_pos.copy()
     retract_pos[2] += 0.1
 
-    move_to_position(sim, robot, retract_pos, gripper_open=False, steps=150, sleep_sec=SLOW)
+    retract_steps = _scaled_steps(150, motion_scale, min_steps=40)
+    move_to_position(sim, robot, retract_pos, gripper_open=False,
+                     steps=retract_steps, sleep_sec=SLOW)
 
-    open_gripper(sim, robot, steps=60, sleep_sec=SLOW)
+    grip_steps = _scaled_steps(60, motion_scale, min_steps=15)
+    open_gripper(sim, robot, steps=grip_steps, sleep_sec=SLOW)
     # print(f"  ✓ Push complete!")
     return True
 

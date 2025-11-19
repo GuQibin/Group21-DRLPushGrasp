@@ -286,6 +286,7 @@ class PPOConfig:
     normalize_rewards: bool = True
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 42
+    motion_scale: float = 1.0  # <1.0 speeds up env by shortening controller rollouts
 
     # Network settings (remains unchanged)
     hidden_size: int = 256
@@ -305,12 +306,12 @@ def get_entropy_coef(current_step, total_steps, start_coef, end_coef):
 
 
 # ====== FUNCTION 2: make_env ======
-def make_env(render=True):
+def make_env(render=True, motion_scale=1.0):
     """
     Create custom StrategicPushAndGraspEnv.
     """
     render_mode = "human" if render else 'rgb_array'
-    env = StrategicPushAndGraspEnv(render_mode=render_mode)
+    env = StrategicPushAndGraspEnv(render_mode=render_mode, motion_scale=motion_scale)
     return env
 
 
@@ -325,7 +326,7 @@ def ppo_train(cfg: PPOConfig):
     random.seed(cfg.seed)
 
     # Create environment
-    env = make_env(render=False)
+    env = make_env(render=False, motion_scale=cfg.motion_scale)
     obs_dim = env.observation_space.shape[0]
     # MODIFIED: Action space is Discrete(8), so act_dim is 8 (for logits)
     act_dim = env.action_space.n
@@ -336,6 +337,7 @@ def ppo_train(cfg: PPOConfig):
     print(f"Observation dim: {obs_dim}")
     print(f"Action dim (Logits Size): {act_dim}")
     print(f"Device: {cfg.device}")
+    print(f"Motion scale: {cfg.motion_scale:.2f}")
     # ... (rest of print config remains unchanged)
 
     # ====== Initialize network and optimizer ======
@@ -670,7 +672,7 @@ if __name__ == "__main__":
         rollout_steps=1024,
         update_epochs=3,
         mini_batch=256,
-        device="cuda",
+        #device="cuda",
         gamma=0.99,
         gae_lambda=0.95,
         clip_eps=0.2,
@@ -683,13 +685,14 @@ if __name__ == "__main__":
         lr_min=1e-5,
         target_kl=0.02,
         normalize_rewards=True,
-        # device="cuda" if torch.cuda.is_available() else "cpu",
+        device="cuda" if torch.cuda.is_available() else "cpu",
         seed=42,
         hidden_size=256,
         num_layers=4,
         activation="tanh",
         save_dir="checkpoints_run1",
         checkpoint_interval=1_000,
+        motion_scale=0.5,
     )
     net = ppo_train(cfg)
 
@@ -697,7 +700,7 @@ if __name__ == "__main__":
     print("\nStarting evaluation...")
     evaluate_policy(
         net,
-        make_env_fn=lambda render=True: make_env(render),
+        make_env_fn=lambda render=True: make_env(render, motion_scale=cfg.motion_scale),
         episodes=10,
         render=True,
         record_dir=None,

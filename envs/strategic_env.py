@@ -118,10 +118,11 @@ class StrategicPushAndGraspEnv(gym.Env):
         4: 1.0,  # 180 deg: -X
         5: -0.75,  # -135 deg
         6: -0.5,  # -90 deg: -Y
+        
         7: -0.25,  # -45 deg
     }
 
-    def __init__(self, render_mode: str = "human"):
+    def __init__(self, render_mode: str = "human", motion_scale: float = 1.0):
         print("=" * 70)
         print("Initializing Strategic Env (Decoupled Spawn/Reach Bounds)")
         print("=" * 70)
@@ -159,6 +160,8 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.total_training_steps = 200_000
         self.total_objects_at_start = 0
 
+        self.motion_scale = float(max(0.1, motion_scale))
+
         # Discrete Action Space
         self.action_space = spaces.Discrete(8)  # 0 to 7
 
@@ -168,6 +171,7 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         print(f"Action space: {self.action_space}")
         print(f"Observation space: {self.observation_space}")
+        print(f"Motion scale: {self.motion_scale:.2f}")
         print("=" * 70 + "\n")
 
     # ======================================================================
@@ -290,12 +294,14 @@ class StrategicPushAndGraspEnv(gym.Env):
         if action_type == "grasp":
             self.action_was_successful = execute_pick_and_place(
                 self.sim, self.robot, self.current_target, alpha_x, alpha_y,
-                self.goal_pos, workspace_bounds=self.WORKSPACE_BOUNDS
+                self.goal_pos, workspace_bounds=self.WORKSPACE_BOUNDS,
+                motion_scale=self.motion_scale
             )
         elif action_type == "push":
             self.action_was_successful = execute_push(
                 self.sim, self.robot, self.current_target, alpha_x, alpha_y,
-                alpha_theta, workspace_bounds=self.WORKSPACE_BOUNDS
+                alpha_theta, workspace_bounds=self.WORKSPACE_BOUNDS,
+                motion_scale=self.motion_scale
             )
 
         # ==================================================================
