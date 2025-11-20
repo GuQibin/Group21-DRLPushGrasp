@@ -1,16 +1,32 @@
 # Group21-DRLPushGrasp
 **Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation**
-*ME5418 Project Milestone 3: Full PPO2 Training with Learning Rate Decay*
+Authored by: Gu Qibin (A0329840Y), Zhang Jiacheng (A0329995A), Goh Zheng Cong (A0332295A)
 
 ---
 
-## Project Overview (Milestone 3)
+## Project Overview (Final report)
 
-This milestone implements the complete PPO2 algorithm within our hierarchical reinforcement-learning framework.
-The goal is to enable a robotic manipulator to learn and optimize both push and grasp strategies in cluttered scenes through stable on-policy updates, while integrating a learning-rate decay scheduler to improve training convergence and performance stability.
+This repository contains the implementation for a thesis project on "Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation." The system trains a Franka Emika Panda robot in simulation to clear a cluttered tabletop by intelligently switching between rule-based grasping for unoccluded objects and reinforcement learning (RL)-learned pushing to clear occlusions, using a hierarchical control architecture for sample-efficient learning.
+
+-----
+
+## Key Features
+
+* Hierarchical action space: A 4D continuous action space ([`α_skill, α_x, α_y, α_θ`]) that unifies discrete skill selection (push/grasp) with continuous parameterization.
+* Occlusion-aware reasoning: Explicit spatial representation in the observation space enables the policy to learn when to clear blockers before attempting to grasp a target.
+* Stable PPO training: Custom implementation of Proximal Policy Optimization (PPO) with reward shaping, Generalized Advantage Estimation (GAE), and curriculum learning for robust policy convergence.
+* Modular architecture: Decoupled motion primitives (`robot_util`), physics reasoning (`physics_util`), and object reasoning (`object_util`) for maintainability and extensibility.
 
 ---
 
+## System Architecture
+
+The system is built on a hierarchical RL framework:
+* High-Level RL Policy: A PPO-based agent that outputs a 4D action vector for skill selection and parameterization
+* Mid-Level Motion Primitives: Pre-programmed, robust controllers for `execute_pick_and_place` and `execute_push`
+* Low-Level Control: PyBullet physics simulation with inverse kinematics and collision checking
+
+---
 ## Directory Structure
 
 ```text
@@ -158,3 +174,4 @@ can focus on **when** to push vs. grasp—not *how* to drive every joint.
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
