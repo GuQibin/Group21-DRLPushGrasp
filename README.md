@@ -1,6 +1,11 @@
 # Group21-DRLPushGrasp
+
 **Multi-Primitive Robotic Manipulation via Proximal Policy Optimization (PPO): Occlusion-Aware Target Selection in Cluttered Table Top Environments**
-Authored by: Gu Qibin (A0329840Y), Zhang Jiacheng (A0329995A), Goh Zheng Cong (A0332295A)
+
+Authored by: 
+* Gu Qibin (A0329840Y),
+* Zhang Jiacheng (A0329995A),
+* Goh Zheng Cong (A0332295A)
 
 ---
 
@@ -279,6 +284,7 @@ else:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
 
 
 
