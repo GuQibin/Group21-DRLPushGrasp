@@ -45,7 +45,7 @@ A structured 300+ dimensional vector containing:
 
 # Action Space
 
-# 8 Discrete Push Directions:
+8 Discrete Push Directions:
 * 0: 0° (+X direction)
 * 1: 45°
 * 2: 90° (+Y direction)
@@ -59,7 +59,7 @@ A structured 300+ dimensional vector containing:
 
 ## Quick Start
 
-# Prerequisites
+Prerequisites
 
 * Python 3.8+
 * PyBullet
@@ -280,6 +280,7 @@ else:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
 
 
 
