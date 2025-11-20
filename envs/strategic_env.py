@@ -101,7 +101,7 @@ class StrategicPushAndGraspEnv(gym.Env):
     # 2. WORKSPACE BOUNDS: Expanded area for ROBOT REACH
     # Allows robot to reach objects that are pushed out of the spawn zone but still on table.
     # Range increased to +/- 0.30 (Table limit is approx 0.40)
-    WORKSPACE_BOUNDS = (-0.30, 0.30, -0.30, 0.30)
+    WORKSPACE_BOUNDS = (-0.45, 0.45, -0.45, 0.45)
 
     # Objects closer than 7.5cm are now considered occluded (harder task)
     OCCLUSION_THRESHOLD = 0.075
@@ -426,7 +426,7 @@ class StrategicPushAndGraspEnv(gym.Env):
                         break
         reward_info['collision'] = collision_penalty
 
-        reward_info['step'] = -0.05 if action_type == "push" else 0.0
+        reward_info['step'] = -0.6 if action_type == "push" else 0.0
 
         trajectory_penalty = 0.0
         if self.previous_joint_positions is not None:

@@ -563,6 +563,8 @@ def ppo_train(cfg: PPOConfig):
                     "optimizer_state_dict": opt.state_dict(),
                     "global_steps": global_steps,
                     "config": cfg.__dict__,
+                    "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+                    "learning_rate": current_lr,
                 },
                 ckpt_path,
             )
