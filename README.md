@@ -44,9 +44,6 @@ A structured 300+ dimensional vector containing:
 * Goal context (goal position and size)
 
 # Action Space
-`α_skill`: Skill selection threshold (grasp if < 0, push otherwise)
-`α_x`, `α_y`: Continuous local offsets from target object centroid (±2.5cm)
-`α_θ`: Push direction in radians (mapped from [`-π, π`])
 
 # 8 Discrete Push Directions:
 * 0: 0° (+X direction)
@@ -283,6 +280,7 @@ else:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
 
 
 
