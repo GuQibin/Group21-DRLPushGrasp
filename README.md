@@ -224,8 +224,7 @@ High-level manipulation primitives and control abstractions:
 
 `execute_pick_and_place()` - Rule-Based Grasping
 
-# Automatic execution for unoccluded objects:
-
+Automatic execution for unoccluded objects:
 1. Approach object from above
 2. Descend to grasp height
 3. Close gripper with verification
@@ -284,6 +283,7 @@ else:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
 
 
 
