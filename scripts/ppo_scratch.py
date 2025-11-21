@@ -3,6 +3,7 @@
 # ===================================================================
 # PPO FROM SCRATCH — ANNOTATED FOR ME5418 PROJECT (GROUP 21)
 # HYBRID CONTROL: RL learns Discrete 8D Push Direction
+# FEATURES: TensorBoard + Raw Return Tracking + Overnight Config
 # ===================================================================
 
 import os
@@ -15,7 +16,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions import Normal, Categorical  # MODIFIED: Added Categorical
+from torch.distributions import Categorical
+from torch.utils.tensorboard import SummaryWriter
 
 import gymnasium as gym
 
@@ -105,17 +107,13 @@ class RewardNormalizer:
         self.returns = 0.0
 
 
-# ============ ACTION SQUASHING + LOG PROB CORRECTION ===============
-# REMOVED: No longer needed as action space is purely discrete.
-
-
 # ===================== ACTOR-CRITIC NETWORK ========================
 class ActorCritic(nn.Module):
     # act_dim is now 8 (for 8 discrete push directions)
-    def __init__(self, obs_dim, act_dim, hidden_size=256, num_layers=2, activation="tanh"):
+    def __init__(self, obs_dim, act_dim, hidden_size=256, num_layers=4, activation="tanh"):
         super().__init__()
 
-        # Activation factory (remains unchanged)
+        # Activation factory
         def _act_factory(name: str):
             name = name.lower()
             if name == "tanh": return nn.Tanh
@@ -126,7 +124,7 @@ class ActorCritic(nn.Module):
 
         Act = _act_factory(activation)
 
-        # Shared backbone (remains unchanged)
+        # Shared backbone
         layers = []
         in_dim = obs_dim
         for _ in range(num_layers):
@@ -135,20 +133,19 @@ class ActorCritic(nn.Module):
             in_dim = hidden_size
         self.backbone = nn.Sequential(*layers)
 
-        # MODIFIED: Policy head outputs logits for Categorical distribution
+        # Policy head outputs logits for Categorical distribution
         self.policy_head = nn.Linear(hidden_size, act_dim)
 
-        # Value head: V(s) (remains unchanged)
+        # Value head: V(s)
         self.v_head = nn.Linear(hidden_size, 1)
 
-        # Xavier init for stability (remains unchanged)
+        # Xavier init for stability
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
                 nn.init.zeros_(m.bias)
 
     def forward(self, obs):
-        # MODIFIED: Returns logits and V
         h = self.backbone(obs)
         logits = self.policy_head(h)
         v = self.v_head(h)
@@ -156,11 +153,10 @@ class ActorCritic(nn.Module):
 
     def act(self, obs):
         """Sample discrete action (index 0-7) during rollout."""
-        # MODIFIED: Uses Categorical distribution
         logits, v = self.forward(obs)
 
         dist = Categorical(logits=logits)
-        a = dist.sample()  # a is the discrete action index tensor (e.g., tensor([3]))
+        a = dist.sample()  # a is the discrete action index tensor
 
         # logp shape: (batch_size, 1)
         logp = dist.log_prob(a).unsqueeze(-1)
@@ -169,12 +165,10 @@ class ActorCritic(nn.Module):
         raw_a = a.float().unsqueeze(-1)
 
         # Return the action index as a scalar integer (needed for env.step)
-        # We don't need mu, std anymore
         return a.squeeze(0).cpu().numpy().item(), logp, v, raw_a
 
     def evaluate_actions(self, obs, raw_actions):
-        """Recompute logp, entropy, v for PPO update (given old raw action indices)."""
-        # MODIFIED: Uses Categorical distribution
+        """Recompute logp, entropy, v for PPO update."""
         logits, v = self.forward(obs)
 
         # raw_actions is (N, 1) float tensor. Needs to be (N) long tensor for Categorical.
@@ -182,17 +176,13 @@ class ActorCritic(nn.Module):
 
         dist = Categorical(logits=logits)
         logp = dist.log_prob(actions_long).unsqueeze(-1)
-
-        # Entropy of the discrete distribution
         entropy = dist.entropy().unsqueeze(-1)
 
-        # No Tanh correction is needed
         return logp, entropy, v
 
 
 # ====================== ROLLOUT BUFFER =============================
 class RolloutBuffer:
-    # MODIFIED: act_dim for storage is fixed to 1 (for discrete index)
     def __init__(self, size, obs_dim, act_dim, device):
         self.size = size
         self.device = device
@@ -204,7 +194,6 @@ class RolloutBuffer:
 
         # Pre-allocate tensors
         self.obs = torch.zeros((size, obs_dim), dtype=torch.float32, device=device)
-        # MODIFIED: Size is (size, 1)
         self.raw_a = torch.zeros((size, act_storage_dim), dtype=torch.float32, device=device)  # action index
         self.a = torch.zeros((size, act_storage_dim), dtype=torch.float32, device=device)  # action index copy
         self.logp = torch.zeros((size, 1), dtype=torch.float32, device=device)
@@ -212,7 +201,7 @@ class RolloutBuffer:
         self.r = torch.zeros((size, 1), dtype=torch.float32, device=device)
         self.done = torch.zeros((size, 1), dtype=torch.float32, device=device)
 
-        # Filled after GAE computation (remains unchanged)
+        # Filled after GAE computation
         self.adv = torch.zeros((size, 1), dtype=torch.float32, device=device)
         self.ret = torch.zeros((size, 1), dtype=torch.float32, device=device)
 
@@ -229,7 +218,6 @@ class RolloutBuffer:
             self.full = True
             self.ptr = 0
 
-    # compute_gae (remains unchanged)
     def compute_gae(self, last_v, gamma=0.99, lam=0.95):
         """Generalized Advantage Estimation (GAE-λ)"""
         T = self.size if self.full else self.ptr
@@ -245,7 +233,6 @@ class RolloutBuffer:
         self.adv[:T] = adv
         self.ret[:T] = ret
 
-    # get (remains unchanged)
     def get(self, batch_size):
         """Yield shuffled mini-batches for PPO update."""
         T = self.size if self.full else self.ptr
@@ -267,11 +254,17 @@ class RolloutBuffer:
 # ========================= CONFIGURATION ===========================
 @dataclass
 class PPOConfig:
-    # ... (All config parameters remain unchanged)
-    total_steps: int = 200_000
-    rollout_steps: int = 8192
+    # --- Training Duration (Optimized for 8-10 hours) ---
+    total_steps: int = 300_000  # Sufficient for discrete high-level actions
+    checkpoint_interval: int = 20_000  # Save frequently
+
+    # --- Resume Training (None = Start Fresh) ---
+    load_model_path: str = None  # FORCE START FROM SCRATCH due to physics changes
+
+    # --- PPO Hyperparameters ---
+    rollout_steps: int = 4096  # Balanced buffer size
     update_epochs: int = 4
-    mini_batch: int = 512
+    mini_batch: int = 256
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_eps: float = 0.2
@@ -284,18 +277,17 @@ class PPOConfig:
     lr_min: float = 1e-5
     target_kl: float = 0.02
     normalize_rewards: bool = True
+
+    # --- System ---
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 42
-    motion_scale: float = 1.0  # <1.0 speeds up env by shortening controller rollouts
 
-    # Network settings (remains unchanged)
+    # --- Environment & Network ---
+    motion_scale: float = 0.5  # Stability prioritized
     hidden_size: int = 256
-    num_layers: int = 2
+    num_layers: int = 4  # Matching teammate's deeper network
     activation: str = "tanh"
-
-    # Checkpoint settings (remains unchanged)
-    save_dir: str = "checkpoints"
-    checkpoint_interval: int = 5_000
+    save_dir: str = "checkpoints_run1"
 
 
 # ====== FUNCTION 1: get_entropy_coef ======
@@ -320,15 +312,24 @@ def ppo_train(cfg: PPOConfig):
     """
     Main PPO training loop — fully on-policy, GAE, clipped objective.
     """
+    # --- Enable GPU Optimization ---
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        print(f"🚀 CUDNN Benchmark Enabled. Training on {torch.cuda.get_device_name(0)}")
+
+    # --- Initialize TensorBoard Writer ---
+    run_name = f"ppo_strategic_{int(time.time())}"
+    writer = SummaryWriter(f"runs/{run_name}")
+    print(f"📊 TensorBoard logging to: runs/{run_name}")
+
     # ====== Setup ======
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
 
-    # Create environment
+    # Create environment (Force render=False for training speed)
     env = make_env(render=False, motion_scale=cfg.motion_scale)
     obs_dim = env.observation_space.shape[0]
-    # MODIFIED: Action space is Discrete(8), so act_dim is 8 (for logits)
     act_dim = env.action_space.n
 
     print("=" * 70)
@@ -338,7 +339,7 @@ def ppo_train(cfg: PPOConfig):
     print(f"Action dim (Logits Size): {act_dim}")
     print(f"Device: {cfg.device}")
     print(f"Motion scale: {cfg.motion_scale:.2f}")
-    # ... (rest of print config remains unchanged)
+    print("=" * 70 + "\n")
 
     # ====== Initialize network and optimizer ======
     net = ActorCritic(
@@ -351,37 +352,54 @@ def ppo_train(cfg: PPOConfig):
 
     opt = optim.Adam(net.parameters(), lr=cfg.lr)
 
-    # Learning rate scheduler (remains unchanged)
+    # ====== [NEW] Load Checkpoint if provided ======
+    global_steps = 0
+    start_step = 0
+
+    if cfg.load_model_path is not None and os.path.exists(cfg.load_model_path):
+        print(f"🔄 Loading checkpoint from: {cfg.load_model_path}")
+        checkpoint = torch.load(cfg.load_model_path, map_location=cfg.device)
+        net.load_state_dict(checkpoint['model_state_dict'])
+        opt.load_state_dict(checkpoint['optimizer_state_dict'])
+        global_steps = checkpoint['global_steps']
+        start_step = global_steps
+        print(f"✅ Resuming training from Step {global_steps}")
+    else:
+        print("🌟 Starting training from scratch")
+
+    # Learning rate scheduler
     scheduler = None
     if cfg.use_lr_schedule:
+        # Calculate remaining steps
+        remaining = max(1, cfg.total_steps - global_steps)
         scheduler = optim.lr_scheduler.LinearLR(
             opt,
             start_factor=1.0,
             end_factor=cfg.lr_min / cfg.lr,
-            total_iters=cfg.total_steps // cfg.rollout_steps
+            total_iters=remaining // cfg.rollout_steps
         )
 
-    # Initialize reward normalizer (remains unchanged)
+    # Initialize reward normalizer
     reward_normalizer = None
     if cfg.normalize_rewards:
         reward_normalizer = RewardNormalizer(gamma=cfg.gamma)
 
     # ====== Initialize buffer ======
-    # Note: RolloutBuffer's internal action storage size is now 1D
     buf = RolloutBuffer(cfg.rollout_steps, obs_dim, act_dim, cfg.device)
 
-    # ====== Training metrics (remains unchanged) ======
-    global_steps = 0
+    # ====== Training metrics ======
     episode_returns = []
+    episode_raw_returns = []
     episode_lengths = []
     ep_ret, ep_len = 0.0, 0
+    ep_raw_ret = 0.0
 
     # Reset environment
     obs, _ = env.reset(seed=cfg.seed)
     start_time = time.time()
-    last_ckpt_step = 0
+    last_ckpt_step = global_steps
     progress_log_interval = max(100, cfg.rollout_steps // 4)
-    last_progress_print = 0
+    last_progress_print = global_steps
 
     print("Starting training...\n")
 
@@ -393,13 +411,14 @@ def ppo_train(cfg: PPOConfig):
             for step in range(cfg.rollout_steps):
                 obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
 
-                # MODIFIED: net.act returns the integer index action_idx
                 action_idx, logp, v, raw_a = net.act(obs_t)
 
-                # action_idx is the discrete integer (0-7) expected by env.step()
                 obs_next, reward, terminated, truncated, info = env.step(action_idx)
 
-                # Normalize reward if enabled (remains unchanged)
+                # Track RAW return
+                ep_raw_ret += reward
+
+                # Normalize reward if enabled
                 if reward_normalizer is not None:
                     reward_normalizer.update(reward)
                     reward = reward_normalizer.normalize(reward)
@@ -423,12 +442,10 @@ def ppo_train(cfg: PPOConfig):
                     last_progress_print = global_steps
 
                 # Store transition
-                # Note: For discrete PPO, we store the action index tensor (raw_a)
-                # in both raw_a and a slots in the buffer.
                 buf.add(
                     obs_t.squeeze(0),
-                    raw_a.squeeze(0),  # Action index as float tensor
-                    raw_a.squeeze(0),  # Action index as float tensor (copy)
+                    raw_a.squeeze(0),
+                    raw_a.squeeze(0),
                     logp.squeeze(0),
                     v.squeeze(0),
                     torch.tensor([reward], dtype=torch.float32, device=cfg.device),
@@ -437,30 +454,33 @@ def ppo_train(cfg: PPOConfig):
 
                 obs = obs_next
 
-                # ... (rest of rollout loop remains unchanged)
                 if done:
+                    # Log to TensorBoard
+                    writer.add_scalar("Charts/Episode_Return_Normalized", ep_ret, global_steps)
+                    writer.add_scalar("Charts/Episode_Return_Raw", ep_raw_ret, global_steps)
+                    writer.add_scalar("Charts/Episode_Length", ep_len, global_steps)
+
                     episode_returns.append(ep_ret)
+                    episode_raw_returns.append(ep_raw_ret)
                     episode_lengths.append(ep_len)
 
                     if reward_normalizer is not None:
                         reward_normalizer.reset_episode()
 
-                    # Print episode info
                     elapsed = time.time() - start_time
-                    recent_returns = episode_returns[-10:] if len(episode_returns) >= 10 else episode_returns
-                    avg_recent = np.mean(recent_returns)
+                    # Use Raw Return for Avg10 display (more intuitive)
+                    recent_raw = episode_raw_returns[-10:] if len(episode_raw_returns) >= 10 else episode_raw_returns
+                    avg_recent_raw = np.mean(recent_raw) if recent_raw else 0.0
 
                     print(f"[Episode {len(episode_returns):4d}] Steps={global_steps:6d} | "
-                          f"Return={ep_ret:7.2f} | Length={ep_len:3d} | "
-                          f"Avg10={avg_recent:7.2f} | Time={_fmt_secs(elapsed)}")
+                          f"RawRet={ep_raw_ret:7.2f} | NormRet={ep_ret:6.2f} | "
+                          f"Len={ep_len:3d} | Avg10(Raw)={avg_recent_raw:7.2f} | Time={_fmt_secs(elapsed)}")
 
-                    ep_ret, ep_len = 0.0, 0
+                    ep_ret, ep_len, ep_raw_ret = 0.0, 0, 0.0
                     obs, _ = env.reset()
 
                 if global_steps >= cfg.total_steps:
                     break
-
-        # ... (Compute GAE and PPO update loops remain unchanged, using raw_a as the action index)
 
         # ====== Compute GAE ======
         with torch.inference_mode():
@@ -470,7 +490,7 @@ def ppo_train(cfg: PPOConfig):
 
         buf.compute_gae(last_v, gamma=cfg.gamma, lam=cfg.gae_lambda)
 
-        # ====== Get current entropy coefficient (decays over training) ======
+        # ====== Get current entropy coefficient ======
         current_ent_coef = get_entropy_coef(
             global_steps,
             cfg.total_steps,
@@ -478,7 +498,7 @@ def ppo_train(cfg: PPOConfig):
             cfg.ent_coef_end
         )
 
-        # ====== PPO update (multiple epochs over mini-batches) ======
+        # ====== PPO update ======
         net.train()
         total_policy_loss = 0
         total_value_loss = 0
@@ -489,46 +509,35 @@ def ppo_train(cfg: PPOConfig):
         early_stop = False
         for epoch in range(cfg.update_epochs):
             for mb_obs, mb_raw_a, _, mb_logp_old, _, mb_adv, mb_ret in buf.get(cfg.mini_batch):
-                # Normalize advantages (remains unchanged)
                 mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
                 new_logp, entropy, v = net.evaluate_actions(mb_obs, mb_raw_a)
 
                 ratio = torch.exp(new_logp - mb_logp_old)
 
-                # Check KL divergence for early stopping (remains unchanged)
                 with torch.no_grad():
-                    # For discrete actions, use log(P_old / P_new) approximation
                     approx_kl = (mb_logp_old - new_logp).mean().item()
                     total_kl += approx_kl
 
                     if approx_kl > cfg.target_kl:
-                        print(
-                            f"  ⚠️ Early stopping at epoch {epoch + 1}/{cfg.update_epochs}, KL={approx_kl:.4f} > {cfg.target_kl}")
+                        # print(f"  ⚠️ Early stopping at epoch {epoch + 1}...") # Suppress frequent log
                         early_stop = True
                         break
 
-                # Policy loss (clipped)
                 surr1 = ratio * mb_adv
                 surr2 = torch.clamp(ratio, 1.0 - cfg.clip_eps, 1.0 + cfg.clip_eps) * mb_adv
                 policy_loss = -torch.min(surr1, surr2).mean()
 
-                # Value loss (remains unchanged)
                 value_loss = 0.5 * (mb_ret - v).pow(2).mean()
-
-                # Entropy regularization
                 entropy_loss = -entropy.mean()
 
-                # Total loss with current entropy coefficient
                 loss = policy_loss + cfg.vf_coef * value_loss + current_ent_coef * entropy_loss
 
-                # Optimization step (remains unchanged)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(net.parameters(), cfg.max_grad_norm)
                 opt.step()
 
-                # Track metrics (remains unchanged)
                 total_policy_loss += policy_loss.item()
                 total_value_loss += value_loss.item()
                 total_entropy += entropy.mean().item()
@@ -537,22 +546,29 @@ def ppo_train(cfg: PPOConfig):
             if early_stop:
                 break
 
-        # ... (rest of update tracking and checkpointing remains unchanged)
         if scheduler is not None:
             scheduler.step()
             current_lr = scheduler.get_last_lr()[0]
         else:
             current_lr = cfg.lr
 
+        # Calculate Averages
         avg_policy_loss = total_policy_loss / num_updates if num_updates > 0 else 0
         avg_value_loss = total_value_loss / num_updates if num_updates > 0 else 0
         avg_entropy = total_entropy / num_updates if num_updates > 0 else 0
         avg_kl = total_kl / num_updates if num_updates > 0 else 0
 
+        # Log to TensorBoard
+        writer.add_scalar("Loss/Policy", avg_policy_loss, global_steps)
+        writer.add_scalar("Loss/Value", avg_value_loss, global_steps)
+        writer.add_scalar("Loss/Entropy", avg_entropy, global_steps)
+        writer.add_scalar("Charts/Approx_KL", avg_kl, global_steps)
+        writer.add_scalar("Charts/Learning_Rate", current_lr, global_steps)
+        writer.add_scalar("Charts/Entropy_Coef", current_ent_coef, global_steps)
+
         print(f"[Update] Steps={global_steps:6d} | "
-              f"PolicyLoss={avg_policy_loss:.4f} | ValueLoss={avg_value_loss:.4f} | "
-              f"Entropy={avg_entropy:.4f} | KL={avg_kl:.4f} | "
-              f"EntCoef={current_ent_coef:.4f} | LR={current_lr:.2e}")
+              f"PolLoss={avg_policy_loss:.4f} | ValLoss={avg_value_loss:.4f} | "
+              f"Ent={avg_entropy:.4f} | KL={avg_kl:.4f}")
 
         if cfg.save_dir and (global_steps - last_ckpt_step) >= cfg.checkpoint_interval:
             os.makedirs(cfg.save_dir, exist_ok=True)
@@ -573,39 +589,36 @@ def ppo_train(cfg: PPOConfig):
             print(f"[Checkpoint] Saved to {ckpt_path}")
             last_ckpt_step = global_steps
 
-    env.close()
+    # --- Final save logic ---
+    if cfg.save_dir:
+        os.makedirs(cfg.save_dir, exist_ok=True)
+        final_path = os.path.join(cfg.save_dir, "ppo_final_weights.pt")
+        torch.save(net.state_dict(), final_path)
+        print(f"[Final Save] Saved final weights to {final_path}")
 
-    # ... (Final statistics remain unchanged)
+    env.close()
+    writer.close()
+
     print("\n" + "=" * 70)
     print("TRAINING COMPLETED")
     print("=" * 70)
     if len(episode_returns) > 0:
         print(f"Total episodes: {len(episode_returns)}")
-        print(f"Final 10 episodes avg return: {np.mean(episode_returns[-10:]):.2f}")
-        print(f"Best episode return: {np.max(episode_returns):.2f}")
-        print(f"Final 10 episodes avg length: {np.mean(episode_lengths[-10:]):.1f}")
+        print(f"Final 10 avg (Raw): {np.mean(episode_raw_returns[-10:]):.2f}")
+        print(f"Best episode (Raw): {np.max(episode_raw_returns):.2f}")
     print("=" * 70 + "\n")
 
     return net
 
 
-# ====== Evaluation: run deterministic policy for several episodes ======
+# ====== Evaluation: run deterministic policy ======
 def evaluate_policy(net, make_env_fn, episodes=10, render=True, record_dir=None, seed=123):
-    """
-    Args:
-        net: trained ActorCritic
-        ...
-    """
     from collections import defaultdict
 
     env = make_env_fn(render=render)
 
     if record_dir is not None:
-        try:
-            # ... (video recording logic remains unchanged)
-            pass
-        except Exception as e:
-            print(f"[Eval] RecordVideo init failed: {e}")
+        pass
 
     net.eval()
     rng = np.random.RandomState(seed)
@@ -619,10 +632,8 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=True, record_dir=None,
             ep_ret, ep_len = 0.0, 0
 
             while True:
-                # MODIFIED: Deterministic action uses the argmax (most likely) logit
                 obs_t = torch.as_tensor(obs, dtype=torch.float32, device=next(net.parameters()).device).unsqueeze(0)
                 logits, _v = net.forward(obs_t)
-                # Deterministic action: Argmax of logits gives the discrete index
                 action_idx = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().item()
 
                 obs, r, terminated, truncated, info = env.step(action_idx)
@@ -639,7 +650,6 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=True, record_dir=None,
                 if done:
                     returns.append(ep_ret)
                     lengths.append(ep_len)
-                    # ... (success tracking remains unchanged)
                     if isinstance(info, dict):
                         for key in ("success", "is_success"):
                             if key in info:
@@ -650,7 +660,6 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=True, record_dir=None,
                     break
 
     env.close()
-    # ... (rest of summary stats remains unchanged)
 
     avg_ret = float(np.mean(returns)) if returns else 0.0
     avg_len = float(np.mean(lengths)) if lengths else 0.0
@@ -668,35 +677,27 @@ def evaluate_policy(net, make_env_fn, episodes=10, render=True, record_dir=None,
 
 if __name__ == "__main__":
     cfg = PPOConfig(
-        total_steps=20_000,
-        rollout_steps=1024,
-        update_epochs=3,
+        total_steps=100_000,  # 300k Steps target
+        checkpoint_interval=10_000,  # Save every 20k
+
+        rollout_steps=4096,  # Buffer size
+        update_epochs=4,
         mini_batch=256,
-        #device="cuda",
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_eps=0.2,
-        vf_coef=1.0,
-        ent_coef_start=0.01,
-        ent_coef_end=0.001,
-        lr=3e-4,
-        max_grad_norm=0.5,
-        use_lr_schedule=True,
-        lr_min=1e-5,
-        target_kl=0.02,
-        normalize_rewards=True,
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        seed=42,
-        hidden_size=256,
-        num_layers=4,
-        activation="tanh",
-        save_dir="checkpoints_run1",
-        checkpoint_interval=1_000,
+
+        # FORCE NEW TRAINING
+        load_model_path=None,
+
+        # System & Params
+        device="cuda",
         motion_scale=0.5,
+        num_layers=4,  # Match network depth
+        save_dir="checkpoints_run2",
     )
+
+    # 1. Start Training (Render=False for speed)
     net = ppo_train(cfg)
 
-    # Post-training evaluation (no rendering, 10 episodes)
+    # 2. Evaluate Final Model (Render=True to see result)
     print("\nStarting evaluation...")
     evaluate_policy(
         net,

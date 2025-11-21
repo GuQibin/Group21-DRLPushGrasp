@@ -77,14 +77,16 @@ def compute_exploration_bonus(
 
 class StrategicPushAndGraspEnv(gym.Env):
     """
-    Strategic Push-Grasp Environment with SEPARATE GOAL PLATFORM:
-    - Priority 1: Rule-Based Grasp (if non-occluded) -> Moves to Goal Platform
-    - Priority 2: RL-Trained Discrete Push (if only occluded) -> Stays on Main Table
+    Strategic Push-Grasp Environment with RETRY LOGIC:
+    - Priority 1: Rule-Based Grasp.
+      - If FAIL < 3 times: Minor penalty (-1.0), retry next step.
+      - If FAIL >= 3 times: Remove object, penalty (-5.0).
+    - Priority 2: RL-Trained Discrete Push.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
-    # Color constants for visual feedback
+    # Color constants
     COLOR_GREEN = [0.1, 0.8, 0.1, 1.0]  # Non-occluded
     COLOR_YELLOW = [0.8, 0.8, 0.1, 1.0]  # (unused)
     COLOR_RED = [0.8, 0.1, 0.1, 1.0]  # Occluded objects
@@ -93,23 +95,14 @@ class StrategicPushAndGraspEnv(gym.Env):
     MAX_OBJECTS = 12
 
     # --- WORKSPACE CONFIGURATION ---
-
-    # 1. SPAWN BOUNDS: Tight area for INITIAL generation (High Density)
-    # This ensures the puzzle starts hard.
     SPAWN_BOUNDS = (-0.15, 0.15, -0.15, 0.15)
 
-    # 2. WORKSPACE BOUNDS: Expanded area for ROBOT REACH
-    # Allows robot to reach objects that are pushed out of the spawn zone but still on table.
-    # Range increased to +/- 0.30 (Table limit is approx 0.40)
-    WORKSPACE_BOUNDS = (-0.30, 0.30, -0.30, 0.30)
+    # Expanded reach bounds
+    WORKSPACE_BOUNDS = (-0.45, 0.45, -0.45, 0.45)
 
-    # Objects closer than 7.5cm are now considered occluded (harder task)
     OCCLUSION_THRESHOLD = 0.075
-
-    # Must be > OCCLUSION_THRESHOLD
     MIN_OBJECT_SEPARATION = 0.08
 
-    # Fixed 8 discrete push directions (index 0 to 7)
     PUSH_DIRECTIONS = {
         0: 0.0,  # 0 deg: +X
         1: 0.25,  # 45 deg
@@ -118,13 +111,12 @@ class StrategicPushAndGraspEnv(gym.Env):
         4: 1.0,  # 180 deg: -X
         5: -0.75,  # -135 deg
         6: -0.5,  # -90 deg: -Y
-        
         7: -0.25,  # -45 deg
     }
 
     def __init__(self, render_mode: str = "human", motion_scale: float = 1.0):
         print("=" * 70)
-        print("Initializing Strategic Env (Decoupled Spawn/Reach Bounds)")
+        print("Initializing Strategic Env (3-Try Grasp Mechanism)")
         print("=" * 70)
 
         self.sim = PyBullet(render_mode=render_mode)
@@ -140,6 +132,9 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.action_was_successful = False
         self.scene_setup = False
 
+        # [NEW] Track grasp attempts per object
+        self.grasp_attempt_counts = {}
+
         self.episode_step = 0
         self.max_episode_steps = 100
 
@@ -149,11 +144,9 @@ class StrategicPushAndGraspEnv(gym.Env):
         self._prev_distance_to_target = None
         self.num_occluded_objects_prev = 0
 
-        # --- GOAL ZONE CONFIGURATION ---
-        # Separate platform to the side
+        # Goal Zone
         self.goal_pos = np.array([0.0, 0.35], dtype=np.float32)
         self.goal_size = 0.12
-
         self.table_bounds = np.array([0.4, 0.4], dtype=np.float32)
 
         self.global_steps = 0
@@ -161,18 +154,10 @@ class StrategicPushAndGraspEnv(gym.Env):
         self.total_objects_at_start = 0
 
         self.motion_scale = float(max(0.1, motion_scale))
+        self.action_space = spaces.Discrete(8)
 
-        # Discrete Action Space
-        self.action_space = spaces.Discrete(8)  # 0 to 7
-
-        # Observation Space
         obs_dim = 22 + 6 + (self.MAX_OBJECTS * 21) + (self.MAX_OBJECTS * self.MAX_OBJECTS) + self.MAX_OBJECTS
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
-
-        print(f"Action space: {self.action_space}")
-        print(f"Observation space: {self.observation_space}")
-        print(f"Motion scale: {self.motion_scale:.2f}")
-        print("=" * 70 + "\n")
 
     # ======================================================================
     # HELPER METHODS
@@ -185,6 +170,10 @@ class StrategicPushAndGraspEnv(gym.Env):
                 p.removeBody(bodyUniqueId=body_id)
 
             del self.objects[body_name]
+            # Clean up tracking dicts
+            if body_name in self.grasp_attempt_counts:
+                del self.grasp_attempt_counts[body_name]
+
             if body_name in self.sim._bodies_idx:
                 del self.sim._bodies_idx[body_name]
             if body_name in self.previous_object_distances:
@@ -204,7 +193,6 @@ class StrategicPushAndGraspEnv(gym.Env):
         for obj_name in list(self.objects.keys()):
             if obj_name not in self.collected_objects:
                 obj_pos = self.sim.get_base_position(obj_name)
-                # Goal check uses the new side platform coordinates
                 if check_object_in_goal(obj_pos, self.goal_pos, self.goal_size):
                     self.collected_objects.add(obj_name)
                     newly_collected_count += 1
@@ -230,14 +218,8 @@ class StrategicPushAndGraspEnv(gym.Env):
 
         return self.current_target
 
-    def _should_force_push(self, target_name: Optional[str]) -> bool:
-        if not target_name or target_name not in self.objects:
-            return False
-        meta = self.objects[target_name]
-        return bool(meta.get("is_occluded", False))
-
     # ======================================================================
-    # STEP FUNCTION
+    # STEP FUNCTION (RETRY LOGIC)
     # ======================================================================
 
     def step(self, action: int):
@@ -255,7 +237,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         alpha_x, alpha_y, alpha_theta = 0.0, 0.0, 0.0
 
         if len(uncollected_non_occluded) > 0:
-            # PRIORITY 1: GRASP (Rule-Based) -> Move to Goal Platform
+            # PRIORITY 1: GRASP (Rule-Based)
             action_type = "grasp"
             target_name = select_target_heuristic(
                 self.sim,
@@ -265,7 +247,7 @@ class StrategicPushAndGraspEnv(gym.Env):
             if target_name is None:
                 target_name = select_target_heuristic(self.sim, self.objects, self.goal_pos, self.collected_objects)
         else:
-            # PRIORITY 2: PUSH (RL-Trained) -> Stay on Main Table
+            # PRIORITY 2: PUSH (RL-Trained)
             action_type = "push"
             discrete_dir_index = action
             alpha_x, alpha_y = 0.0, 0.0
@@ -287,16 +269,39 @@ class StrategicPushAndGraspEnv(gym.Env):
             return obs, float(reward), bool(terminated), False, info
 
         # ==================================================================
-        # EXECUTE (Using Expanded WORKSPACE_BOUNDS)
+        # EXECUTE
         # ==================================================================
-        # NOTE: We use self.WORKSPACE_BOUNDS (+/- 0.30) here to allow reaching
-        # objects that have drifted outside the initial spawn zone (+/- 0.15)
+        manual_drop_penalty = 0.0
+
         if action_type == "grasp":
             self.action_was_successful = execute_pick_and_place(
                 self.sim, self.robot, self.current_target, alpha_x, alpha_y,
                 self.goal_pos, workspace_bounds=self.WORKSPACE_BOUNDS,
                 motion_scale=self.motion_scale
             )
+
+            # [MODIFIED] Retry Logic
+            if not self.action_was_successful:
+                # Increment failure count
+                fails = self.grasp_attempt_counts.get(self.current_target, 0) + 1
+                self.grasp_attempt_counts[self.current_target] = fails
+
+                print(f"⚠️ Grasp failed for {self.current_target} (Attempt {fails}/3)")
+
+                if fails >= 3:
+                    # Max attempts reached -> Remove and Penalize (-5)
+                    print(f"💀 Max grasp attempts reached. Removing {self.current_target} (-5.0).")
+                    self._remove_object(self.current_target, mark_as_collected=False)
+                    manual_drop_penalty = -5.0
+                else:
+                    # Retry allowed -> Minor penalty (-1.0) to discourage bad pushes
+                    # The loop will naturally select it again next step since it's still closest/unoccluded
+                    manual_drop_penalty = -1.0
+            else:
+                # Success -> Clear counter (object will be removed by check_collected anyway)
+                if self.current_target in self.grasp_attempt_counts:
+                    del self.grasp_attempt_counts[self.current_target]
+
         elif action_type == "push":
             self.action_was_successful = execute_push(
                 self.sim, self.robot, self.current_target, alpha_x, alpha_y,
@@ -310,17 +315,16 @@ class StrategicPushAndGraspEnv(gym.Env):
         num_newly_collected = self._check_and_remove_collected_objects()
 
         workspace_penalty = 0.0
-
-        # Physical Table Limits for "Falling off"
         TABLE_LIMITS = (-0.45, 0.45, -0.45, 0.45)
 
         for obj_name in list(self.objects.keys()):
-            # Only remove if it physically falls off table
             if check_workspace_violation(self.sim, obj_name, TABLE_LIMITS, z_min=-0.05):
                 workspace_penalty = -10.0
                 print(f"✗ Object {obj_name} fell off the table! (-10)")
                 self._remove_object(obj_name, mark_as_collected=False)
                 break
+
+        total_workspace_penalty = workspace_penalty + manual_drop_penalty
 
         analyze_scene_occlusions(self.sim, self.objects, self.OCCLUSION_THRESHOLD)
         update_object_colors(self.sim, self.objects, self.COLOR_GREEN, self.COLOR_YELLOW, self.COLOR_RED)
@@ -330,7 +334,7 @@ class StrategicPushAndGraspEnv(gym.Env):
         reward, reward_info = self._compute_complete_reward(
             action_type=action_type, current_joints=current_joints,
             num_newly_collected=num_newly_collected,
-            workspace_penalty=workspace_penalty
+            workspace_penalty=total_workspace_penalty
         )
 
         self.previous_joint_positions = current_joints
@@ -385,15 +389,12 @@ class StrategicPushAndGraspEnv(gym.Env):
         occlusion_reward = 0.0
         if action_type == "push":
             if delta_occlusion > 0:
-                # Success
                 occlusion_reward = delta_occlusion * 5.0
                 print(f" Push cleared {delta_occlusion} occluded objects! (+{occlusion_reward:.1f})")
             elif delta_occlusion < 0:
-                # Failure (Worse)
                 occlusion_reward = delta_occlusion * 3.0
                 print(f" Push created {-delta_occlusion} new occlusions! ({occlusion_reward:.1f})")
             else:
-                # Stagnation (No Change)
                 occlusion_reward = -1.0
 
         reward_info['occlusion_change'] = occlusion_reward
@@ -626,10 +627,11 @@ class StrategicPushAndGraspEnv(gym.Env):
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
+        self.grasp_attempt_counts.clear()  # Clear attempts
 
         with self.sim.no_rendering():
             if not self.scene_setup:
-                # 1. Main Table (Center 0,0) - Remains large for workspace
+                # 1. Main Table (Center 0,0)
                 self.sim.create_box(
                     body_name="table", half_extents=np.array([0.4, 0.4, 0.01]),
                     mass=0.0, position=np.array([0, 0, -0.01]),
@@ -637,7 +639,6 @@ class StrategicPushAndGraspEnv(gym.Env):
                 )
 
                 # 2. Goal Platform (To the side)
-                # MODIFIED: Platform size matches goal_size exactly to force precision
                 platform_half_size = self.goal_size / 2.0
 
                 self.sim.create_box(

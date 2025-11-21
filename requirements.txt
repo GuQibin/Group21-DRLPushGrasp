@@ -1,4 +1,4 @@
-# Python 3.8 is recommended
+# Python 3.10 is recommended
 
 # Top-level dependencies for the ME5418 project.
 # Pip will handle installing their sub-dependencies automatically.
