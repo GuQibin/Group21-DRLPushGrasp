@@ -73,20 +73,29 @@ Prerequisites
 ```text
 Group21-DRLPushGrasp/
 ├── environment.yaml                # Conda env spec (Python 3.8 + pip pkgs)
+├── requirements.txt                # Pip requirements (alt install path)
 ├── README.md                       # This file
+├── checkpoints_run1_nolrdecay/     # Checkpoints from training without LR decay
+├── checkpoints_run2_lrdecay/       # Checkpoints from training with LR decay
+├── evaluation_report_no_lrdecay/   # Evaluation data collected without LR decay
+├── evaluation_report_with_lrdecay/ # Evaluation data collected with LR decay
+├── training_report_with_lrdecay/   # Training logs collected with LR decay
+├── video/                          # Demo videos (e.g., robotic_arm_vid.mp4)
 ├── envs/
 │   ├── __init__.py                 # Registers the custom Gym env
 │   └── strategic_env.py            # Core environment (StrategicPushAndGraspEnv)
 ├── scripts/
 │   ├── __init__.py                 # [CRITICAL] Makes 'scripts' a Python package
-│   ├── ppo_scratch.py              # [CORE] Full implementation of PPO and ActorCritic NN
+│   ├── ppo_scratch.py              # [CORE] PPO + ActorCritic training loop
 │   ├── demo_nn.py                  # [DEMO] Milestone 2 demo script (fwd/bwd pass)
-│   └── test_custom_env.py          # [OPTIONAL] M1 environment smoke test script for gym
+│   ├── test_custom_env.py          # [OPTIONAL] M1 environment smoke test for gym
+│   ├── visualize_checkpoint.py     # [DEMO] Visualize a trained checkpoint
+│   └── eval_checkpoints.py         # [EVAL] Batch-evaluate checkpoints, log metrics
 └── utils/
     ├── object_util.py              # Object-related utilities
     ├── physics_util.py             # Physics/collision-related utilities
     └── robot_util.py               # Robot action primitives
-
+```
 
 ## ⚙️ Environment Setup
 
@@ -160,7 +169,7 @@ The project includes a comprehensive validation script to isolate and test the n
 
 ```Bash
 # Run the network validation demo
-python -m scripts.validate_network
+python -m scripts.visualize_checkpoint
 ```
 
 ### Expected Output
@@ -192,7 +201,7 @@ python -m scripts.test_custom_env
 ```
 
 ## Demo Video
-https://github.com/user-attachments/assets/deaf7ecc-4a43-48ef-a841-1b6cb5a00487
+`video/robotic_arm_vid.mp4` (local demo clip)
 
 # 🚀 Appendix: Core Utilities & Action Primitives
 

@@ -51,7 +51,7 @@ def main():
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=Path("checkpoints_run2/ppo_step_10240.pt"),
+        default=Path("checkpoints_run2_lrdecay/ppo_step_10240.pt"),
         help="Path to the .pt checkpoint to load",
     )
     parser.add_argument("--episodes", type=int, default=1, help="Episodes to run")
