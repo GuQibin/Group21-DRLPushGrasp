@@ -153,7 +153,8 @@ Checkpointing: Model weights saved periodically to `checkpoints/` directory.
 
 ## Neural Network Validation Demo 
 
-<img width="397" height="341" alt="Image_20251121145300_2020_2" src="https://github.com/user-attachments/assets/04f6706c-8940-4623-a43d-a2049a278114" />
+<img width="750" height="696" alt="Image_20251121223224_114_4" src="https://github.com/user-attachments/assets/71164d95-f9c3-4661-a0de-fb51378df6ea" />
+
 
 The project includes a comprehensive validation script to isolate and test the neural network architecture:
 
@@ -285,6 +286,7 @@ else:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
 
 
 
