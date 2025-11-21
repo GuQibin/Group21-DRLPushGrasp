@@ -1,6 +1,6 @@
 # Group21-DRLPushGrasp
 
-**Multi-Primitive Robotic Manipulation via Proximal Policy Optimization (PPO): Occlusion-Aware Target Selection in Cluttered Table Top Environments**
+**Multi-Primitive Robotic Manipulation via Proximal Policy Optimization (PPO)-Directed Push: Occlusion-Aware Target Selection in Cluttered Table Top Environments**
 
 Authored by: 
 * Gu Qibin (A0329840Y),
@@ -153,6 +153,8 @@ Checkpointing: Model weights saved periodically to `checkpoints/` directory.
 
 ## Neural Network Validation Demo 
 
+<img width="397" height="341" alt="Image_20251121145300_2020_2" src="https://github.com/user-attachments/assets/04f6706c-8940-4623-a43d-a2049a278114" />
+
 The project includes a comprehensive validation script to isolate and test the neural network architecture:
 
 ```Bash
@@ -187,6 +189,9 @@ If you wish to test the environment's stability with purely random actions (prod
 ```Bash
 python -m scripts.test_custom_env
 ```
+
+## Demo Video
+https://github.com/user-attachments/assets/deaf7ecc-4a43-48ef-a841-1b6cb5a00487
 
 # 🚀 Appendix: Core Utilities & Action Primitives
 
@@ -280,6 +285,7 @@ else:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
 
 
 
