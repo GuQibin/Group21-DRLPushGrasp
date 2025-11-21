@@ -1,7 +1,7 @@
 """Batch evaluation of PPO checkpoints.
 
 Run with:
-    python -m scripts.eval_checkpoints --checkpoint-dir checkpoints_run1
+    python -m scripts.eval_checkpoints --checkpoint-dir checkpoints_run1_nolrdecay
 """
 
 import argparse
