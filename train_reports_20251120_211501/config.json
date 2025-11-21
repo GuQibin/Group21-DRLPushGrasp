@@ -1,0 +1,33 @@
+{
+  "total_steps": 20000,
+  "rollout_steps": 1024,
+  "update_epochs": 3,
+  "mini_batch": 256,
+  "gamma": 0.99,
+  "gae_lambda": 0.95,
+  "clip_eps": 0.2,
+  "vf_coef": 1.0,
+  "ent_coef_start": 0.01,
+  "ent_coef_end": 0.001,
+  "lr": 0.0003,
+  "max_grad_norm": 0.5,
+  "use_lr_schedule": true,
+  "lr_min": 1e-05,
+  "target_kl": 0.02,
+  "normalize_rewards": true,
+  "device": "cuda",
+  "seed": 42,
+  "motion_scale": 0.5,
+  "lr_decay_milestones": [
+    0.4,
+    0.6,
+    0.8
+  ],
+  "lr_decay_gamma": 0.5,
+  "report_dir": "",
+  "hidden_size": 256,
+  "num_layers": 4,
+  "activation": "tanh",
+  "save_dir": "checkpoints_run2",
+  "checkpoint_interval": 1000
+}

@@ -9,7 +9,11 @@ import os
 import time
 import math
 import random
+import csv
+import json
 import numpy as np
+from pathlib import Path
+from datetime import datetime
 from dataclasses import dataclass
 
 import torch
@@ -18,6 +22,7 @@ import torch.optim as optim
 from torch.distributions import Normal, Categorical  # MODIFIED: Added Categorical
 
 import gymnasium as gym
+import matplotlib.pyplot as plt
 
 
 # --------------------- UTILITY: Time Formatting ---------------------
@@ -287,6 +292,9 @@ class PPOConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 42
     motion_scale: float = 1.0  # <1.0 speeds up env by shortening controller rollouts
+    lr_decay_milestones: tuple = (0.4, 0.6, 0.8)
+    lr_decay_gamma: float = 0.5
+    report_dir: str = ""
 
     # Network settings (remains unchanged)
     hidden_size: int = 256
@@ -325,6 +333,35 @@ def ppo_train(cfg: PPOConfig):
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_dir = Path(cfg.report_dir) if cfg.report_dir else Path(f"train_reports_{timestamp}")
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    with (report_dir / "config.json").open("w", encoding="utf-8") as f:
+        json.dump(cfg.__dict__, f, indent=2, default=str)
+
+    episode_log_path = report_dir / "episode_metrics.csv"
+    update_log_path = report_dir / "update_metrics.csv"
+    episode_fields = ["episode", "global_steps", "return", "length", "elapsed_sec"]
+    update_fields = [
+        "update_index",
+        "global_steps",
+        "avg_policy_loss",
+        "avg_value_loss",
+        "avg_entropy",
+        "avg_kl",
+        "entropy_coef",
+        "learning_rate",
+        "recent_avg_return",
+    ]
+
+    episode_file = episode_log_path.open("w", newline="", encoding="utf-8")
+    update_file = update_log_path.open("w", newline="", encoding="utf-8")
+    episode_writer = csv.DictWriter(episode_file, fieldnames=episode_fields)
+    update_writer = csv.DictWriter(update_file, fieldnames=update_fields)
+    episode_writer.writeheader()
+    update_writer.writeheader()
+
     # Create environment
     env = make_env(render=False, motion_scale=cfg.motion_scale)
     obs_dim = env.observation_space.shape[0]
@@ -340,255 +377,313 @@ def ppo_train(cfg: PPOConfig):
     print(f"Motion scale: {cfg.motion_scale:.2f}")
     # ... (rest of print config remains unchanged)
 
-    # ====== Initialize network and optimizer ======
-    net = ActorCritic(
-        obs_dim,
-        act_dim,
-        hidden_size=cfg.hidden_size,
-        num_layers=cfg.num_layers,
-        activation=cfg.activation
-    ).to(cfg.device)
+    update_history = []
+    updates_done = 0
 
-    opt = optim.Adam(net.parameters(), lr=cfg.lr)
+    try:
+        # ====== Initialize network and optimizer ======
+        net = ActorCritic(
+            obs_dim,
+            act_dim,
+            hidden_size=cfg.hidden_size,
+            num_layers=cfg.num_layers,
+            activation=cfg.activation
+        ).to(cfg.device)
 
-    # Learning rate scheduler (remains unchanged)
-    scheduler = None
-    if cfg.use_lr_schedule:
-        scheduler = optim.lr_scheduler.LinearLR(
-            opt,
-            start_factor=1.0,
-            end_factor=cfg.lr_min / cfg.lr,
-            total_iters=cfg.total_steps // cfg.rollout_steps
-        )
+        opt = optim.Adam(net.parameters(), lr=cfg.lr)
 
-    # Initialize reward normalizer (remains unchanged)
-    reward_normalizer = None
-    if cfg.normalize_rewards:
-        reward_normalizer = RewardNormalizer(gamma=cfg.gamma)
+        # Learning rate scheduler (multi-step decay)
+        scheduler = None
+        if cfg.use_lr_schedule:
+            total_updates = max(1, cfg.total_steps // cfg.rollout_steps)
+            milestone_steps = sorted({
+                max(1, int(frac * total_updates))
+                for frac in cfg.lr_decay_milestones
+                if 0.0 < frac < 1.0
+            })
+            if not milestone_steps:
+                milestone_steps = [max(1, total_updates // 2)]
+            scheduler = optim.lr_scheduler.MultiStepLR(
+                opt,
+                milestones=milestone_steps,
+                gamma=cfg.lr_decay_gamma,
+            )
 
-    # ====== Initialize buffer ======
-    # Note: RolloutBuffer's internal action storage size is now 1D
-    buf = RolloutBuffer(cfg.rollout_steps, obs_dim, act_dim, cfg.device)
+        # Initialize reward normalizer (remains unchanged)
+        reward_normalizer = None
+        if cfg.normalize_rewards:
+            reward_normalizer = RewardNormalizer(gamma=cfg.gamma)
 
-    # ====== Training metrics (remains unchanged) ======
-    global_steps = 0
-    episode_returns = []
-    episode_lengths = []
-    ep_ret, ep_len = 0.0, 0
+        # ====== Initialize buffer ======
+        # Note: RolloutBuffer's internal action storage size is now 1D
+        buf = RolloutBuffer(cfg.rollout_steps, obs_dim, act_dim, cfg.device)
 
-    # Reset environment
-    obs, _ = env.reset(seed=cfg.seed)
-    start_time = time.time()
-    last_ckpt_step = 0
-    progress_log_interval = max(100, cfg.rollout_steps // 4)
-    last_progress_print = 0
+        # ====== Training metrics (remains unchanged) ======
+        global_steps = 0
+        episode_returns = []
+        episode_lengths = []
+        ep_ret, ep_len = 0.0, 0
 
-    print("Starting training...\n")
+        # Reset environment
+        obs, _ = env.reset(seed=cfg.seed)
+        start_time = time.time()
+        last_ckpt_step = 0
+        progress_log_interval = max(100, cfg.rollout_steps // 4)
+        last_progress_print = 0
 
-    # ====== Main training loop ======
-    while global_steps < cfg.total_steps:
-        # ====== Collect rollout ======
-        net.eval()
-        with torch.inference_mode():
-            for step in range(cfg.rollout_steps):
-                obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
+        print("Starting training...\n")
 
-                # MODIFIED: net.act returns the integer index action_idx
-                action_idx, logp, v, raw_a = net.act(obs_t)
+        # ====== Main training loop ======
+        while global_steps < cfg.total_steps:
+            # ====== Collect rollout ======
+            net.eval()
+            with torch.inference_mode():
+                for step in range(cfg.rollout_steps):
+                    obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
 
-                # action_idx is the discrete integer (0-7) expected by env.step()
-                obs_next, reward, terminated, truncated, info = env.step(action_idx)
+                    # MODIFIED: net.act returns the integer index action_idx
+                    action_idx, logp, v, raw_a = net.act(obs_t)
 
-                # Normalize reward if enabled (remains unchanged)
-                if reward_normalizer is not None:
-                    reward_normalizer.update(reward)
-                    reward = reward_normalizer.normalize(reward)
+                    # action_idx is the discrete integer (0-7) expected by env.step()
+                    obs_next, reward, terminated, truncated, info = env.step(action_idx)
 
-                ep_ret += reward
-                ep_len += 1
-                global_steps += 1
-
-                done = terminated or truncated
-
-                if (global_steps - last_progress_print) >= progress_log_interval or global_steps >= cfg.total_steps:
-                    episode_max_steps = getattr(env, "max_episode_steps", 0)
-                    _print_training_progress(
-                        global_steps,
-                        cfg.total_steps,
-                        start_time,
-                        len(episode_returns) + 1,
-                        ep_len,
-                        episode_max_steps
-                    )
-                    last_progress_print = global_steps
-
-                # Store transition
-                # Note: For discrete PPO, we store the action index tensor (raw_a)
-                # in both raw_a and a slots in the buffer.
-                buf.add(
-                    obs_t.squeeze(0),
-                    raw_a.squeeze(0),  # Action index as float tensor
-                    raw_a.squeeze(0),  # Action index as float tensor (copy)
-                    logp.squeeze(0),
-                    v.squeeze(0),
-                    torch.tensor([reward], dtype=torch.float32, device=cfg.device),
-                    torch.tensor([float(done)], dtype=torch.float32, device=cfg.device)
-                )
-
-                obs = obs_next
-
-                # ... (rest of rollout loop remains unchanged)
-                if done:
-                    episode_returns.append(ep_ret)
-                    episode_lengths.append(ep_len)
-
+                    # Normalize reward if enabled (remains unchanged)
                     if reward_normalizer is not None:
-                        reward_normalizer.reset_episode()
+                        reward_normalizer.update(reward)
+                        reward = reward_normalizer.normalize(reward)
 
-                    # Print episode info
-                    elapsed = time.time() - start_time
-                    recent_returns = episode_returns[-10:] if len(episode_returns) >= 10 else episode_returns
-                    avg_recent = np.mean(recent_returns)
+                    ep_ret += reward
+                    ep_len += 1
+                    global_steps += 1
 
-                    print(f"[Episode {len(episode_returns):4d}] Steps={global_steps:6d} | "
-                          f"Return={ep_ret:7.2f} | Length={ep_len:3d} | "
-                          f"Avg10={avg_recent:7.2f} | Time={_fmt_secs(elapsed)}")
+                    done = terminated or truncated
 
-                    ep_ret, ep_len = 0.0, 0
-                    obs, _ = env.reset()
+                    if (global_steps - last_progress_print) >= progress_log_interval or global_steps >= cfg.total_steps:
+                        episode_max_steps = getattr(env, "max_episode_steps", 0)
+                        _print_training_progress(
+                            global_steps,
+                            cfg.total_steps,
+                            start_time,
+                            len(episode_returns) + 1,
+                            ep_len,
+                            episode_max_steps
+                        )
+                        last_progress_print = global_steps
 
-                if global_steps >= cfg.total_steps:
-                    break
+                    # Store transition
+                    # Note: For discrete PPO, we store the action index tensor (raw_a)
+                    # in both raw_a and a slots in the buffer.
+                    buf.add(
+                        obs_t.squeeze(0),
+                        raw_a.squeeze(0),  # Action index as float tensor
+                        raw_a.squeeze(0),  # Action index as float tensor (copy)
+                        logp.squeeze(0),
+                        v.squeeze(0),
+                        torch.tensor([reward], dtype=torch.float32, device=cfg.device),
+                        torch.tensor([float(done)], dtype=torch.float32, device=cfg.device)
+                    )
 
-        # ... (Compute GAE and PPO update loops remain unchanged, using raw_a as the action index)
+                    obs = obs_next
 
-        # ====== Compute GAE ======
-        with torch.inference_mode():
-            obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
-            _, last_v = net.forward(obs_t)
-            last_v = last_v.squeeze()
+                    if done:
+                        episode_returns.append(ep_ret)
+                        episode_lengths.append(ep_len)
 
-        buf.compute_gae(last_v, gamma=cfg.gamma, lam=cfg.gae_lambda)
+                        if reward_normalizer is not None:
+                            reward_normalizer.reset_episode()
 
-        # ====== Get current entropy coefficient (decays over training) ======
-        current_ent_coef = get_entropy_coef(
-            global_steps,
-            cfg.total_steps,
-            cfg.ent_coef_start,
-            cfg.ent_coef_end
-        )
+                        elapsed = time.time() - start_time
+                        recent_returns = episode_returns[-10:] if len(episode_returns) >= 10 else episode_returns
+                        avg_recent = np.mean(recent_returns) if recent_returns else 0.0
 
-        # ====== PPO update (multiple epochs over mini-batches) ======
-        net.train()
-        total_policy_loss = 0
-        total_value_loss = 0
-        total_entropy = 0
-        total_kl = 0
-        num_updates = 0
+                        print(f"[Episode {len(episode_returns):4d}] Steps={global_steps:6d} | "
+                              f"Return={ep_ret:7.2f} | Length={ep_len:3d} | "
+                              f"Avg10={avg_recent:7.2f} | Time={_fmt_secs(elapsed)}")
 
-        early_stop = False
-        for epoch in range(cfg.update_epochs):
-            for mb_obs, mb_raw_a, _, mb_logp_old, _, mb_adv, mb_ret in buf.get(cfg.mini_batch):
-                # Normalize advantages (remains unchanged)
-                mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                        episode_writer.writerow(
+                            {
+                                "episode": len(episode_returns),
+                                "global_steps": global_steps,
+                                "return": ep_ret,
+                                "length": ep_len,
+                                "elapsed_sec": round(elapsed, 2),
+                            }
+                        )
+                        episode_file.flush()
 
-                new_logp, entropy, v = net.evaluate_actions(mb_obs, mb_raw_a)
+                        ep_ret, ep_len = 0.0, 0
+                        obs, _ = env.reset()
 
-                ratio = torch.exp(new_logp - mb_logp_old)
-
-                # Check KL divergence for early stopping (remains unchanged)
-                with torch.no_grad():
-                    # For discrete actions, use log(P_old / P_new) approximation
-                    approx_kl = (mb_logp_old - new_logp).mean().item()
-                    total_kl += approx_kl
-
-                    if approx_kl > cfg.target_kl:
-                        print(
-                            f"  ⚠️ Early stopping at epoch {epoch + 1}/{cfg.update_epochs}, KL={approx_kl:.4f} > {cfg.target_kl}")
-                        early_stop = True
+                    if global_steps >= cfg.total_steps:
                         break
 
-                # Policy loss (clipped)
-                surr1 = ratio * mb_adv
-                surr2 = torch.clamp(ratio, 1.0 - cfg.clip_eps, 1.0 + cfg.clip_eps) * mb_adv
-                policy_loss = -torch.min(surr1, surr2).mean()
+            # ====== Compute GAE ======
+            with torch.inference_mode():
+                obs_t = torch.as_tensor(obs, dtype=torch.float32, device=cfg.device).unsqueeze(0)
+                _, last_v = net.forward(obs_t)
+                last_v = last_v.squeeze()
 
-                # Value loss (remains unchanged)
-                value_loss = 0.5 * (mb_ret - v).pow(2).mean()
+            buf.compute_gae(last_v, gamma=cfg.gamma, lam=cfg.gae_lambda)
 
-                # Entropy regularization
-                entropy_loss = -entropy.mean()
-
-                # Total loss with current entropy coefficient
-                loss = policy_loss + cfg.vf_coef * value_loss + current_ent_coef * entropy_loss
-
-                # Optimization step (remains unchanged)
-                opt.zero_grad(set_to_none=True)
-                loss.backward()
-                nn.utils.clip_grad_norm_(net.parameters(), cfg.max_grad_norm)
-                opt.step()
-
-                # Track metrics (remains unchanged)
-                total_policy_loss += policy_loss.item()
-                total_value_loss += value_loss.item()
-                total_entropy += entropy.mean().item()
-                num_updates += 1
-
-            if early_stop:
-                break
-
-        # ... (rest of update tracking and checkpointing remains unchanged)
-        if scheduler is not None:
-            scheduler.step()
-            current_lr = scheduler.get_last_lr()[0]
-        else:
-            current_lr = cfg.lr
-
-        avg_policy_loss = total_policy_loss / num_updates if num_updates > 0 else 0
-        avg_value_loss = total_value_loss / num_updates if num_updates > 0 else 0
-        avg_entropy = total_entropy / num_updates if num_updates > 0 else 0
-        avg_kl = total_kl / num_updates if num_updates > 0 else 0
-
-        print(f"[Update] Steps={global_steps:6d} | "
-              f"PolicyLoss={avg_policy_loss:.4f} | ValueLoss={avg_value_loss:.4f} | "
-              f"Entropy={avg_entropy:.4f} | KL={avg_kl:.4f} | "
-              f"EntCoef={current_ent_coef:.4f} | LR={current_lr:.2e}")
-
-        if cfg.save_dir and (global_steps - last_ckpt_step) >= cfg.checkpoint_interval:
-            os.makedirs(cfg.save_dir, exist_ok=True)
-            ckpt_path = os.path.join(cfg.save_dir, f"ppo_step_{global_steps}.pt")
-            torch.save(
-                {
-                    "model_state_dict": net.state_dict(),
-                    "optimizer_state_dict": opt.state_dict(),
-                    "global_steps": global_steps,
-                    "config": cfg.__dict__,
-                    "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
-                    "learning_rate": current_lr,
-                },
-                ckpt_path,
+            # ====== Get current entropy coefficient (decays over training) ======
+            current_ent_coef = get_entropy_coef(
+                global_steps,
+                cfg.total_steps,
+                cfg.ent_coef_start,
+                cfg.ent_coef_end
             )
-            torch.save(
-                net.state_dict(),
-                os.path.join(cfg.save_dir, "ppo_latest_weights.pt"),
-            )
-            print(f"[Checkpoint] Saved to {ckpt_path}")
-            last_ckpt_step = global_steps
 
-    env.close()
+            # ====== PPO update (multiple epochs over mini-batches) ======
+            net.train()
+            total_policy_loss = 0
+            total_value_loss = 0
+            total_entropy = 0
+            total_kl = 0
+            num_updates = 0
 
-    # ... (Final statistics remain unchanged)
-    print("\n" + "=" * 70)
-    print("TRAINING COMPLETED")
-    print("=" * 70)
-    if len(episode_returns) > 0:
-        print(f"Total episodes: {len(episode_returns)}")
-        print(f"Final 10 episodes avg return: {np.mean(episode_returns[-10:]):.2f}")
-        print(f"Best episode return: {np.max(episode_returns):.2f}")
-        print(f"Final 10 episodes avg length: {np.mean(episode_lengths[-10:]):.1f}")
-    print("=" * 70 + "\n")
+            early_stop = False
+            for epoch in range(cfg.update_epochs):
+                for mb_obs, mb_raw_a, _, mb_logp_old, _, mb_adv, mb_ret in buf.get(cfg.mini_batch):
+                    mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
-    return net
+                    new_logp, entropy, v = net.evaluate_actions(mb_obs, mb_raw_a)
+
+                    ratio = torch.exp(new_logp - mb_logp_old)
+
+                    with torch.no_grad():
+                        approx_kl = (mb_logp_old - new_logp).mean().item()
+                        total_kl += approx_kl
+
+                        if approx_kl > cfg.target_kl:
+                            print(
+                                f"  ⚠️ Early stopping at epoch {epoch + 1}/{cfg.update_epochs}, KL={approx_kl:.4f} > {cfg.target_kl}")
+                            early_stop = True
+                            break
+
+                    surr1 = ratio * mb_adv
+                    surr2 = torch.clamp(ratio, 1.0 - cfg.clip_eps, 1.0 + cfg.clip_eps) * mb_adv
+                    policy_loss = -torch.min(surr1, surr2).mean()
+
+                    value_loss = 0.5 * (mb_ret - v).pow(2).mean()
+
+                    entropy_loss = -entropy.mean()
+
+                    loss = policy_loss + cfg.vf_coef * value_loss + current_ent_coef * entropy_loss
+
+                    opt.zero_grad(set_to_none=True)
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(net.parameters(), cfg.max_grad_norm)
+                    opt.step()
+
+                    total_policy_loss += policy_loss.item()
+                    total_value_loss += value_loss.item()
+                    total_entropy += entropy.mean().item()
+                    num_updates += 1
+
+                if early_stop:
+                    break
+
+            if scheduler is not None:
+                scheduler.step()
+                current_lr = max(scheduler.get_last_lr()[0], cfg.lr_min)
+            else:
+                current_lr = cfg.lr
+
+            avg_policy_loss = total_policy_loss / num_updates if num_updates > 0 else 0
+            avg_value_loss = total_value_loss / num_updates if num_updates > 0 else 0
+            avg_entropy = total_entropy / num_updates if num_updates > 0 else 0
+            avg_kl = total_kl / num_updates if num_updates > 0 else 0
+
+            print(f"[Update] Steps={global_steps:6d} | "
+                  f"PolicyLoss={avg_policy_loss:.4f} | ValueLoss={avg_value_loss:.4f} | "
+                  f"Entropy={avg_entropy:.4f} | KL={avg_kl:.4f} | "
+                  f"EntCoef={current_ent_coef:.4f} | LR={current_lr:.2e}")
+
+            recent_returns = episode_returns[-10:] if episode_returns else []
+            recent_avg_return = float(np.mean(recent_returns)) if recent_returns else 0.0
+            updates_done += 1
+            update_row = {
+                "update_index": updates_done,
+                "global_steps": global_steps,
+                "avg_policy_loss": avg_policy_loss,
+                "avg_value_loss": avg_value_loss,
+                "avg_entropy": avg_entropy,
+                "avg_kl": avg_kl,
+                "entropy_coef": current_ent_coef,
+                "learning_rate": current_lr,
+                "recent_avg_return": recent_avg_return,
+            }
+            update_writer.writerow(update_row)
+            update_file.flush()
+            update_history.append(update_row)
+
+            if cfg.save_dir and (global_steps - last_ckpt_step) >= cfg.checkpoint_interval:
+                os.makedirs(cfg.save_dir, exist_ok=True)
+                ckpt_path = os.path.join(cfg.save_dir, f"ppo_step_{global_steps}.pt")
+                torch.save(
+                    {
+                        "model_state_dict": net.state_dict(),
+                        "optimizer_state_dict": opt.state_dict(),
+                        "global_steps": global_steps,
+                        "config": cfg.__dict__,
+                        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+                        "learning_rate": current_lr,
+                    },
+                    ckpt_path,
+                )
+                torch.save(
+                    net.state_dict(),
+                    os.path.join(cfg.save_dir, "ppo_latest_weights.pt"),
+                )
+                print(f"[Checkpoint] Saved to {ckpt_path}")
+                last_ckpt_step = global_steps
+
+        env.close()
+
+        print("\n" + "=" * 70)
+        print("TRAINING COMPLETED")
+        print("=" * 70)
+        if len(episode_returns) > 0:
+            print(f"Total episodes: {len(episode_returns)}")
+            print(f"Final 10 episodes avg return: {np.mean(episode_returns[-10:]):.2f}")
+            print(f"Best episode return: {np.max(episode_returns):.2f}")
+            print(f"Final 10 episodes avg length: {np.mean(episode_lengths[-10:]):.1f}")
+        print("=" * 70 + "\n")
+
+        if update_history:
+            steps = [row["global_steps"] for row in update_history]
+            loss_vals = [row["avg_policy_loss"] for row in update_history]
+            return_vals = [row["recent_avg_return"] for row in update_history]
+
+            plt.figure(figsize=(6, 4))
+            plt.plot(steps, loss_vals, marker="o")
+            plt.ylabel("Policy Loss")
+            plt.xlabel("Global Steps")
+            plt.title("Policy Loss Curve")
+            loss_path = report_dir / "policy_loss_curve.png"
+            plt.tight_layout()
+            plt.savefig(loss_path)
+            plt.close()
+
+            plt.figure(figsize=(6, 4))
+            plt.plot(steps, return_vals, marker="o", color="green")
+            plt.ylabel("Avg Return (Last10)")
+            plt.xlabel("Global Steps")
+            plt.title("Average Return Curve")
+            return_path = report_dir / "avg_return_curve.png"
+            plt.tight_layout()
+            plt.savefig(return_path)
+            plt.close()
+
+            print(f"Plots saved to {loss_path} and {return_path}")
+
+        print(f"Training reports logged under {report_dir}")
+
+        return net
+
+    finally:
+        episode_file.close()
+        update_file.close()
 
 
 # ====== Evaluation: run deterministic policy for several episodes ======
@@ -692,7 +787,7 @@ if __name__ == "__main__":
         hidden_size=256,
         num_layers=4,
         activation="tanh",
-        save_dir="checkpoints_run1",
+        save_dir="checkpoints_run2",
         checkpoint_interval=1_000,
         motion_scale=0.5,
     )
