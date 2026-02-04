@@ -201,7 +201,9 @@ python -m scripts.test_custom_env
 ```
 
 ## Demo Video
-`video/video.mp4` (local demo clip)
+
+<video src="video/video.mp4" width="600" controls>
+</video>
 
 # 🚀 Appendix: Core Utilities & Action Primitives
 
@@ -295,6 +297,7 @@ else:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
 
 
 
