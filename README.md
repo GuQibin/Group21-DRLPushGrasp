@@ -1,42 +1,101 @@
-# Group21-DRLPushGrasp  
-**Hierarchical Reinforcement Learning for Multi-attribute Object Manipulation**  
-*Joint-Space Control of Push-Grasp Strategies in Constrained Environments*  
+# Group21-DRLPushGrasp
+
+**Multi-Primitive Robotic Manipulation via Proximal Policy Optimization (PPO)-Directed Push: Occlusion-Aware Target Selection in Cluttered Table Top Environments**
+
+Authored by: 
+* Gu Qibin (A0329840Y),
+* Zhang Jiacheng (A0329995A),
+* Goh Zheng Cong (A0332295A)
 
 ---
 
-## Project Overview  
-This project implements a **hierarchical reinforcement learning (HRL)** framework that enables a robotic manipulator to **jointly plan and execute push-and-grasp strategies** in cluttered or constrained environments.  
+## Project Overview (Final report)
 
-It builds upon a custom PyBullet simulation environment with high-level task abstractions (push vs. grasp) and low-level joint-space control, allowing the agent to learn effective manipulation behaviors.  
+This repository contains the implementation for a thesis project on "Multi-Primitive Robotic Manipulation via Proximal Policy Optimization (PPO): Occlusion-Aware Target Selection in Cluttered Table Top Environments." The system trains a Franka Emika Panda robot in simulation to clear a cluttered tabletop using a rule-based hybrid control system that combines deterministic grasping with RL-learned pushing strategies.
+
+-----
+
+## Key Features
+
+* Rule-Based Hybrid Control: Automatic grasping of unoccluded objects combined with RL-learned discrete pushing for occluded targets
+* Occlusion-aware reasoning: Explicit spatial representation in the observation space enables the policy to learn when to clear blockers before attempting to grasp a target.
+* Stable PPO training: Custom implementation of Proximal Policy Optimization (PPO) with reward shaping, Generalized Advantage Estimation (GAE), and curriculum learning for robust policy convergence. Achieves 90% success rate within 20,000 environment steps
+* Discrete Action Space: 8 fixed push directions learned via PPO with categorical policy
+* Modular architecture: Decoupled motion primitives (`robot_util`), physics reasoning (`physics_util`), and object reasoning (`object_util`) for maintainability and extensibility.
 
 ---
 
-## Test Scenario & Random Baseline
-Each episode samples a diverse set of objects (shape/size/pose/placement randomized), always including red/yellow/green targets. The robot executes a random policy over push/grasp primitives to provide a sanity‐check baseline. We report grasp success, push displacement/goal rate, scene clearance, safety violations, and episodic return.
+## System Architecture
+
+The system implements a sophisticated rule-based control system with learned push components:
+
+Control Flow:
+1. Target Assessment: Heuristic selects nearest uncollected object to goal
+2. Occlusion Check: If target is occluded → RL push policy
+3. Skill Execution:
+* Unoccluded: Automatic grasp-and-place to goal platform
+* Occluded: RL-selected push direction from 8 discrete options
+
+# Observation Space
+A structured 300+ dimensional vector containing:
+* Robot state (joint positions, velocities, end-effector pose, gripper width)
+* Object features (positions, velocities, shape descriptors, graspability scores)
+* Spatial relationships (pairwise distance matrix, explicit occlusion masks)
+* Goal context (goal position and size)
+
+# Action Space
+
+8 Discrete Push Directions:
+* 0: 0° (+X direction)
+* 1: 45°
+* 2: 90° (+Y direction)
+* 3: 135°
+* 4: 180° (-X direction)
+* 5: -135°
+* 6: -90° (-Y direction)
+* 7: -45°
 
 ---
 
-## Directory Structure  
+## Quick Start
+
+Prerequisites
+
+* Python 3.8+
+* PyBullet
+* PyTorch
+* Gymnasium
+* NumPy
+
+---
+## Directory Structure
+
 ```text
 Group21-DRLPushGrasp/
 ├── environment.yaml                # Conda env spec (Python 3.8 + pip pkgs)
-├── LICENSE
+├── requirements.txt                # Pip requirements (alt install path)
 ├── README.md                       # This file
-├── requirements.txt                # (Optional) pip-style dependency list
+├── checkpoints_run1_nolrdecay/     # Checkpoints from training without LR decay
+├── checkpoints_run2_lrdecay/       # Checkpoints from training with LR decay
+├── evaluation_report_no_lrdecay/   # Evaluation data collected without LR decay
+├── evaluation_report_with_lrdecay/ # Evaluation data collected with LR decay
+├── training_report_with_lrdecay/   # Training logs collected with LR decay
+├── video/                          # Demo videos (e.g., robotic_arm_vid.mp4)
 ├── envs/
-│   ├── init.py                     # Registers the custom env(s)
-│   └── strategic_env.py            # Core environment implementation
+│   ├── __init__.py                 # Registers the custom Gym env
+│   └── strategic_env.py            # Core environment (StrategicPushAndGraspEnv)
 ├── scripts/
-│   └──  test_custom_env.py          # Simple loop to test the env end-to-end
-│ 
-├── utils/
-│   ├── object_util.py              # Object spawning / utilities
-│   ├── physics_util.py             # Physics helpers (e.g., step/settle)
-│   └── robot_util.py               # Robot (gripper/arm) helper functions
-└── video/
-    └── demo_presentation.mp4       # Demo sample video for presentation
+│   ├── __init__.py                 # [CRITICAL] Makes 'scripts' a Python package
+│   ├── ppo_scratch.py              # [CORE] PPO + ActorCritic training loop
+│   ├── demo_nn.py                  # [DEMO] Milestone 2 demo script (fwd/bwd pass)
+│   ├── test_custom_env.py          # [OPTIONAL] M1 environment smoke test for gym
+│   ├── visualize_checkpoint.py     # [DEMO] Visualize a trained checkpoint
+│   └── eval_checkpoints.py         # [EVAL] Batch-evaluate checkpoints, log metrics
+└── utils/
+    ├── object_util.py              # Object-related utilities
+    ├── physics_util.py             # Physics/collision-related utilities
+    └── robot_util.py               # Robot action primitives
 ```
-
 
 ## ⚙️ Environment Setup
 
@@ -48,77 +107,185 @@ If you already have the `environment.yaml` file:
 conda env create -f environment.yaml
 
 # Activate the environment (make sure the name matches the 'name:' in YAML)
-conda activate me5418
+conda activate me5418-demo
 ```
+
+
+
+## Training the PPO Agent
+Run the main training script with the default configuration:
+
+```Bash
+python -m scripts.ppo_scratch
+```
+
+### Expected Output
+
+You will see:
+
+PyBullet Visualization: A simulation window opens showing the robot training on push-and-grasp tasks with procedurally generated cluttered scenes.
+
+Terminal Training Logs: Live progress monitoring including:
+* Episode returns and lengths
+* PPO loss components (policy loss, value loss, entropy)
+* Success rates and average performance metrics
+* Push direction selection statistics
+
+Training metrics
+
+```Bash
+[Episode   25] Steps=  2048 | Return=  45.20 | Length= 87 | Avg10=  32.15 | Time=00:00:45
+[Update] Steps=  2048 | PolicyLoss=0.1245 | ValueLoss=0.0456 | Entropy=1.2345 | KL=0.0123 | EntCoef=0.0085 | LR=2.85e-4
+```
+* Peak Performance: 90% success rate achieved at 12,288 steps
+* Average Return: 164.5 at best performance
+* Efficient Execution: 29.9 steps per episode at peak efficiency
+
+Checkpointing: Model weights saved periodically to `checkpoints/` directory.
 
 ---
 
-### Run Demo
+## Performance Results
+
+# Training Evaluation (20,000 steps):
+* Best Success Rate: 90%
+* Peak Average Return: 164.5
+* Most Efficient Episode: 29.9 steps
+* Consistent Performance: 60-90% success rate maintained
+
+# Key Insights:
+* The discrete push policy effectively learns to clear occlusions using only 8 fixed directions
+* Rule-based grasping provides reliable object transport to goal platform
+* Combined system solves complex clutter scenarios with high reliability
+
+---
+
+## Neural Network Validation Demo 
+
+<img width="750" height="696" alt="Image_20251121223224_114_4" src="https://github.com/user-attachments/assets/71164d95-f9c3-4661-a0de-fb51378df6ea" />
+
+
+The project includes a comprehensive validation script to isolate and test the neural network architecture:
 
 ```Bash
-# Run the full environment loop to verify environment registration & stepping
+# Run the network validation demo
+python -m scripts.visualize_checkpoint
+```
+
+### Expected Output
+
+You will see:
+
+# Expected Validation Output
+
+1. Environment Initialization: PyBullet window opens with a single-object test scene
+
+2. Forward Pass Demonstration:
+* Episode execution with network-inferred actions
+* Will be shown action vectors and rewards
+
+3. Backward Pass Validation:
+* REINFORCE loss calculation based on collected rewards
+* Network weight comparison before/after optimization step
+* `✓ SUCCESS: Parameter value changed!` confirmation message
+
+This validates the complete training pipeline from state encoding to gradient updates.
+
+---
+
+###  Run Environment Smoke Test
+If you wish to test the environment's stability with purely random actions (produces a lot of log spam), you can run:
+
+```Bash
 python -m scripts.test_custom_env
 ```
 
----
+## Demo Video
+`video/robotic_arm_vid.mp4` (local demo clip)
+
+# 🚀 Appendix: Core Utilities & Action Primitives
 
 ## Object Utilities (`utils/object_util.py`)
-- **`
-This module centralizes **object-level reasoning** for the Strategic Push–Grasp environment:
-shape encoding for NN inputs, pairwise spatial reasoning, occlusion analysis, safe spawning,
-and simple (non-learned) target selection.
-`**  
+
+Centralizes object-level reasoning for the Strategic Push-Grasp environment:
+* Shape Descriptor Encoding: 8D feature vectors (object type, dimensions, volume, graspability)
+* Spatial Analysis: Pairwise distance matrices and occlusion detection
+* Scene Management: Safe object spawning and goal state checking
+* Target Selection: Heuristic-based (nearest to goal) target prioritization
+
 ## Physics Utilities (`utils/physics_util.py`)
-- **`
-Utilities that wrap PyBullet’s low-level API into safer, typed helpers for the Strategic Push–Grasp environment. They cover **workspace bounds, collisions, contact forces, stability checks, ray tests, and visualization**. All functions include conservative error handling to keep training loops robust.
-`**  
+
+Robust wrappers around PyBullet's low-level API:
+* Collision Detection: Robot-table, object-object, and self-collision checking
+* Workspace Management: Boundary violation detection and object stability checks
+* Contact Analysis: Force measurement and detailed contact point information
+* Ray Casting: Line-of-sight checking for occlusion reasoning
+
 ## Robot Utilities (`utils/robot_util.py`)
-- **`
-High-level **manipulation primitives** (pick–place and push) and robust helpers for
-end-effector (EE) state, inverse kinematics, motion control, gripper control, and diagnostics.
-These wrap various panda-gym/PyBullet details behind a stable API so the RL policy
-can focus on **when** to push vs. grasp—not *how* to drive every joint.
-`**  
+
+High-level manipulation primitives and control abstractions:
+
+* Motion Primitives: execute_pick_and_place and execute_push with kinematic feasibility checks
+* Gripper Control: Synchronized finger control for grasping operations
+* Inverse Kinematics: Safe joint trajectory planning via PyBullet IK solver
+* Diagnostic Tools: Robot state monitoring and control validation
 
 ---
 
-## Core Action Primitives
+## 🚀 Core Action Primitives
 
-- **`execute_pick_and_place(sim, robot, target_object, alpha_x, alpha_y, goal_pos, workspace_bounds, approach_height=0.15, grasp_height=0.03) -> bool`**  
-  Eight-phase grasp pipeline (approach → descend → close → verify → lift → transport → place → retract).  
-  - **Inputs:** normalized offsets `alpha_x/alpha_y ∈ [-1,1]` mapped to ±2.5 cm around the object center; workspace clipping enforced.  
-  - **Verification:** micro-lift checks object Z-gain (>1 cm) to confirm a *real* grasp.  
-  - **Returns:** `True` only if all phases succeed (prevents false positive rewards).
+`execute_pick_and_place()` - Rule-Based Grasping
 
-- **`execute_push(sim, robot, target_object, alpha_x, alpha_y, alpha_theta, workspace_bounds, push_distance=0.05, push_height=0.03, use_object_frame=True) -> bool`**  
-  Contact-point selection + straight-line push along a direction parameterized by `alpha_theta` (mapped to angle).  
-  - Clips pre/post push waypoints into workspace bounds.  
-  - Clean 3-phase routine (pre-push → push → retract).
+Automatic execution for unoccluded objects:
+1. Approach object from above
+2. Descend to grasp height
+3. Close gripper with verification
+4. Lift and transport to goal platform
+5. Place object and retract
+
+`execute_push()` - RL-Enhanced Pushing
+
+Policy-selected direction for occluded objects:
+1. Calculate push vector from discrete direction index
+2. Approach with orthogonal offset for torque
+3. Execute linear push along selected direction
+4. Retract and reset for next action
 
 ---
 
-## Sample output (yet to be trained)
-https://github.com/user-attachments/assets/814c61c7-fae9-4b54-856e-484662029390
+## Rule-Based Decision Logic
 
-a series of tests were conducted using a random sampling policy. This approach involves repeatedly calling env.action_space.sample() to generate arbitrary actions, serving as a robust "smoke test" to uncover potential bugs, verify the API, and observe the system's baseline physical behavior without any learned intelligence. 
-the reset logic successfully populates the tabletop with a random number of objects (5-10) of varying types.
-Key features validated during this phase include:
+```
+# Priority 1: Grasp non-occluded objects
+unoccluded_objects = [obj for obj in objects if not occluded(obj)]
+if unoccluded_objects:
+    target = select_nearest_to_goal(unoccluded_objects)
+    execute_pick_and_place(target)
 
-- **Guaranteed Strategic Complexity:** The reset function deterministically creates an occluded object pair (the two red cubes in this example), ensuring every episode requires strategic reasoning.
+# Priority 2: Push occluded objects  
+else:
+    target = select_nearest_to_goal(all_objects)
+    push_direction = policy.act(observation)  # Discrete 0-7
+    execute_push(target, push_direction)
+```
 
-- **State-Based Visualization:**  Objects are automatically colored based on their state, providing immediate visual feedback. In the scene above, Green cubes are non-occluded and graspable, while Red cubes are occluded and require a push action first. Yellow spheres are designated as push-preferred targets. The green square area represents the destination reward target.
+---
 
-- **Safe Spawning:**  The get_safe_spawn_position utility ensures that no objects are spawned inside the goal or overlapping with one another.
+## Technical Insights
 
-A Random Grasp Attempt. The robot moves to execute a grasp on a green cube based on a randomly sampled action vector [α_skill, α_x, α_y, α_θ].
+# Why This Architecture Works:
 
-Observations from this phase confirmed that:
+* Decomposed Complexity: Separates reliable grasping from learned pushing
+* Sample Efficiency: RL only learns push directions, not entire manipulation
+* Robustness: Rule-based components prevent catastrophic failures
+* Interpretability: Clear decision boundaries between skills
 
-- The hybrid action space correctly translates a positive α_skill into a call to the execute_pick_and_place primitive.
+# Performance Characteristics
+* Training Stability: Consistent 60-90% success despite physics stochasticity
+* Generalization: Effective on novel object configurations
+* Efficiency: Fast inference with discrete action selection
 
-- The local coordinate system for α_x and α_y works as intended, with the robot targeting points relative to the object's center, not the world frame.
-
-- The motion primitives are robust enough to handle even nonsensical random commands (e.g., attempting to grasp the very edge of an object) without crashing the simulation.
+---
 
 ## Citation
 ````
@@ -128,3 +295,13 @@ Observations from this phase confirmed that:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
+
+
+
+
+
+
+
+
+
