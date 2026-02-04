@@ -201,7 +201,7 @@ python -m scripts.test_custom_env
 ```
 
 ## Demo Video
-`video/robotic_arm_vid.mp4` (local demo clip)
+`video/video.mp4` (local demo clip)
 
 # 🚀 Appendix: Core Utilities & Action Primitives
 
@@ -295,6 +295,7 @@ else:
   year         = 2021,
   journal      = {4th Robot Learning Workshop: Self-Supervised and Lifelong Learning at NeurIPS},
 }
+
 
 
 
